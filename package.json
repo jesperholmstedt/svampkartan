@@ -1,0 +1,43 @@
+{
+  "name": "svampkartan",
+  "version": "1.0.0",
+  "description": "Interactive mushroom mapping application for Sweden",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -H 0.0.0.0 -p 3000",
+    "dev-https": "node server-https.js",
+    "dev-mobile": "next dev -H 0.0.0.0 -p 8080",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "mushroom",
+    "map",
+    "sweden",
+    "nature",
+    "identification"
+  ],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@types/leaflet": "^1.9.20",
+    "@types/react": "^19.1.12",
+    "@types/react-dom": "^19.1.9",
+    "autoprefixer": "^10.4.21",
+    "eslint": "^9.35.0",
+    "eslint-config-next": "^15.5.3",
+    "leaflet": "^1.9.4",
+    "next": "^15.5.3",
+    "postcss": "^8.5.6",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "tailwindcss": "^3.4.3",
+    "typescript": "^5.9.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.2"
+  }
+}
