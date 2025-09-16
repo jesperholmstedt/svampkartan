@@ -39,3 +39,6 @@ key.pem
 # Test files
 test-server.js
 server-https.js
+
+# Local Netlify folder
+.netlify
