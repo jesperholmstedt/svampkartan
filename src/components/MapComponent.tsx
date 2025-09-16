@@ -377,6 +377,11 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
 
   // Car location functions
   const toggleCarControls = () => {
+    // Prevent car controls during walking navigation
+    if (showWalkingDirection) {
+      return
+    }
+    
     if (!carLocation) {
       // No car parked, start parking process
       parkCar()
@@ -641,6 +646,27 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
     setCurrentNavigationDistance(null)
   }
 
+  // Clear any existing navigation state
+  const clearExistingNavigation = () => {
+    // Clear walking navigation
+    if (showWalkingDirection) {
+      hideWalkingDirection()
+    }
+    
+    // Clear car navigation  
+    if (showCarDirection) {
+      setShowCarDirection(false)
+      if (carDirectionLine && mapRef.current) {
+        mapRef.current.removeLayer(carDirectionLine)
+        setCarDirectionLine(null)
+      }
+    }
+    
+    // Clear any pending navigation dialogs
+    setShowNavigationDialog(false)
+    setShowMapsConfirmation(false)
+  }
+
   // Update car direction line when user location changes
   useEffect(() => {
     if (showCarDirection && userLocation && carLocation) {
@@ -828,11 +854,18 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
     const initMapWithRetry = (attempt = 1) => {
       if (mapContainerRef.current) {
         try {
-          // Start with Finland/Stockholm area - good for mushroom hunting
+          // Start with view showing both Finland and Sweden
           const map = L.map(mapContainerRef.current, {
-            center: [60.1699, 24.9384],
-            zoom: 8,
-            zoomControl: true
+            center: [62.0, 17.0], // Center between Finland and Sweden
+            zoom: 5, // Lower zoom to show both countries
+            zoomControl: true,
+            zoomAnimation: true,
+            zoomAnimationThreshold: 4,
+            fadeAnimation: true,
+            markerZoomAnimation: true,
+            zoomSnap: 0.25, // Allow quarter-step zooms for smoother experience
+            zoomDelta: 0.5, // Smaller zoom steps
+            wheelPxPerZoomLevel: 120 // Smoother mouse wheel zoom
           })
 
           // Add double-tap-and-hold zoom functionality for mobile
@@ -852,12 +885,12 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
                 isDoubleTapHolding = true
                 touchStartY = e.touches[0].clientY
                 touchStartZoom = map.getZoom()
-                e.preventDefault()
+                e.preventDefault() // Only prevent for double tap
                 
                 // Clear any existing timer
                 if (doubleTapTimer) clearTimeout(doubleTapTimer)
               } else {
-                // First tap or too much time passed
+                // First tap or too much time passed - don't prevent default for single taps
                 lastTapTime = currentTime
                 isDoubleTapHolding = false
                 
@@ -876,11 +909,15 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
               const currentY = e.touches[0].clientY
               const deltaY = touchStartY - currentY
               
-              // Calculate zoom level based on vertical movement
-              const zoomDelta = deltaY / 100 // Adjust sensitivity here
+              // Calculate zoom level based on vertical movement with smoother sensitivity
+              const zoomDelta = deltaY / 150 // Reduced sensitivity for smoother control
               const newZoom = Math.max(5, Math.min(17, touchStartZoom + zoomDelta))
               
-              map.setZoom(newZoom, { animate: false })
+              // Use smooth animation for zoom changes
+              map.setZoom(newZoom, { 
+                animate: true,
+                duration: 0.1 // Very fast animation for responsiveness
+              })
             }
           })
 
@@ -1053,6 +1090,11 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
 
     // Add markers to map
     markers.forEach(marker => {
+      // Hide other mushrooms during walking navigation, only show target
+      if (showWalkingDirection && navigationTarget && marker.id !== navigationTarget.id) {
+        return // Skip rendering this marker
+      }
+      
       const sizes = getZoomBasedSizes(mapZoom)
       const categoryColors = getCategoryColors(marker.category || 'edible')
       
@@ -1257,26 +1299,46 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
     let longPressTimer: NodeJS.Timeout
     let isLongPressing = false
     let startPosition: { x: number, y: number } | null = null
+    let startLatLng: { lat: number, lng: number } | null = null
 
-    const handlePointerDown = (e: any) => {
+    const handlePointerDown = (e: TouchEvent | MouseEvent) => {
       // Don't trigger long press if we're already in adding mode or parking mode
       if (isAddingMarker || isParkingMode) return
 
+      // Only handle single touch/click
+      if (e instanceof TouchEvent && e.touches.length > 1) return
+
+      console.log('Long press: pointer down detected') // Debug log
+
       isLongPressing = false
-      startPosition = { x: e.originalEvent.clientX, y: e.originalEvent.clientY }
+      
+      const clientX = e instanceof TouchEvent ? e.touches[0].clientX : e.clientX
+      const clientY = e instanceof TouchEvent ? e.touches[0].clientY : e.clientY
+      
+      startPosition = { x: clientX, y: clientY }
+      
+      // Convert screen coordinates to map coordinates
+      const point = mapRef.current!.containerPointToLatLng([clientX, clientY])
+      startLatLng = { lat: point.lat, lng: point.lng }
+      
+      console.log('Long press: starting timer for coordinates:', startLatLng) // Debug log
       
       longPressTimer = setTimeout(() => {
+        console.log('Long press: timer triggered!') // Debug log
         isLongPressing = true
         // Trigger haptic feedback if available
         if (navigator.vibrate) {
           navigator.vibrate(50)
         }
         // Set pending marker at long press location
-        setPendingMarker({ lat: e.latlng.lat, lng: e.latlng.lng })
+        if (startLatLng) {
+          setPendingMarker({ lat: startLatLng.lat, lng: startLatLng.lng })
+        }
       }, 2000) // 2 seconds
     }
 
-    const handlePointerUp = (e: any) => {
+    const handlePointerUp = (e: TouchEvent | MouseEvent) => {
+      console.log('Long press: pointer up') // Debug log
       if (longPressTimer) {
         clearTimeout(longPressTimer)
       }
@@ -1287,41 +1349,50 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
       }
     }
 
-    const handlePointerMove = (e: any) => {
+    const handlePointerMove = (e: TouchEvent | MouseEvent) => {
       // Cancel long press if user moves too much (prevents accidental triggers while panning)
       if (startPosition && longPressTimer) {
-        const moveDistance = Math.sqrt(
-          Math.pow(e.originalEvent.clientX - startPosition.x, 2) + 
-          Math.pow(e.originalEvent.clientY - startPosition.y, 2)
-        )
+        const clientX = e instanceof TouchEvent ? e.touches[0]?.clientX : e.clientX
+        const clientY = e instanceof TouchEvent ? e.touches[0]?.clientY : e.clientY
         
-        // Cancel if moved more than 10 pixels
-        if (moveDistance > 10) {
-          clearTimeout(longPressTimer)
-          isLongPressing = false
+        if (clientX && clientY) {
+          const moveDistance = Math.sqrt(
+            Math.pow(clientX - startPosition.x, 2) + 
+            Math.pow(clientY - startPosition.y, 2)
+          )
+          
+          // Cancel if moved more than 15 pixels
+          if (moveDistance > 15) {
+            console.log('Long press: cancelled due to movement') // Debug log
+            clearTimeout(longPressTimer)
+            isLongPressing = false
+          }
         }
       }
     }
 
-    // Add event listeners for long press detection
-    mapRef.current.on('mousedown', handlePointerDown)
-    mapRef.current.on('touchstart', handlePointerDown)
-    mapRef.current.on('mouseup', handlePointerUp)
-    mapRef.current.on('touchend', handlePointerUp)
-    mapRef.current.on('mousemove', handlePointerMove)
-    mapRef.current.on('touchmove', handlePointerMove)
+    // Use DOM events directly instead of Leaflet events to avoid conflicts
+    const mapContainer = mapRef.current.getContainer()
+    
+    mapContainer.addEventListener('mousedown', handlePointerDown as EventListener)
+    mapContainer.addEventListener('touchstart', handlePointerDown as EventListener, { passive: false })
+    mapContainer.addEventListener('mouseup', handlePointerUp as EventListener)
+    mapContainer.addEventListener('touchend', handlePointerUp as EventListener)
+    mapContainer.addEventListener('mousemove', handlePointerMove as EventListener)
+    mapContainer.addEventListener('touchmove', handlePointerMove as EventListener)
 
     return () => {
       if (longPressTimer) {
         clearTimeout(longPressTimer)
       }
       if (mapRef.current) {
-        mapRef.current.off('mousedown', handlePointerDown)
-        mapRef.current.off('touchstart', handlePointerDown)
-        mapRef.current.off('mouseup', handlePointerUp)
-        mapRef.current.off('touchend', handlePointerUp)
-        mapRef.current.off('mousemove', handlePointerMove)
-        mapRef.current.off('touchmove', handlePointerMove)
+        const mapContainer = mapRef.current.getContainer()
+        mapContainer.removeEventListener('mousedown', handlePointerDown as EventListener)
+        mapContainer.removeEventListener('touchstart', handlePointerDown as EventListener)
+        mapContainer.removeEventListener('mouseup', handlePointerUp as EventListener)
+        mapContainer.removeEventListener('touchend', handlePointerUp as EventListener)
+        mapContainer.removeEventListener('mousemove', handlePointerMove as EventListener)
+        mapContainer.removeEventListener('touchmove', handlePointerMove as EventListener)
       }
     }
   }, [isAddingMarker, isParkingMode, L])
@@ -1682,44 +1753,48 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
 
         {/* Dropdown Menu */}
         {showMenu && (
-          <div className="absolute top-full right-4 mt-1 bg-white/90 backdrop-blur-md rounded-xl shadow-2xl border border-white/20 min-w-48 py-2">
-            <div className="px-4 py-2 text-gray-600 text-sm border-b border-gray-200/50">
+          <div className="absolute top-full right-2 sm:right-4 mt-1 bg-white/95 backdrop-blur-md rounded-lg sm:rounded-xl shadow-2xl border border-white/20 min-w-40 sm:min-w-48 py-1 sm:py-2">
+            <div className="px-3 sm:px-4 py-1.5 sm:py-2 text-gray-600 text-xs sm:text-sm border-b border-gray-200/50">
               <div className="font-medium">Meny</div>
             </div>
-            <div className="py-1">
+            <div className="py-0.5 sm:py-1">
               <button 
                 onClick={() => {
+                  // Cancel walking navigation when opening finds list
+                  if (showWalkingDirection) {
+                    hideWalkingDirection()
+                  }
                   setShowFindsList(true)
                   setShowMenu(false)
                 }}
-                className="w-full px-4 py-2 text-left text-gray-700 hover:bg-white/50 transition-colors flex items-center gap-3"
+                className="w-full px-3 sm:px-4 py-1.5 sm:py-2 text-left text-gray-700 hover:bg-white/50 transition-colors flex items-center gap-2 sm:gap-3"
               >
-                <span className="text-lg">📋</span>
-                <span className="font-medium">Mina fynd</span>
+                <span className="text-base sm:text-lg">📋</span>
+                <span className="font-medium text-sm sm:text-base">Mina fynd</span>
               </button>
             </div>
-            <div className="py-1">
+            <div className="py-0.5 sm:py-1">
               <button 
                 onClick={() => {
                   setShowCredits(true)
                   setShowMenu(false)
                 }}
-                className="w-full px-4 py-2 text-left text-gray-700 hover:bg-white/50 transition-colors flex items-center gap-3"
+                className="w-full px-3 sm:px-4 py-1.5 sm:py-2 text-left text-gray-700 hover:bg-white/50 transition-colors flex items-center gap-2 sm:gap-3"
               >
-                <span className="text-lg">ℹ️</span>
-                <span className="font-medium">Om appen</span>
+                <span className="text-base sm:text-lg">ℹ️</span>
+                <span className="font-medium text-sm sm:text-base">Om appen</span>
               </button>
             </div>
-            <div className="py-1">
+            <div className="py-0.5 sm:py-1">
               <button 
                 onClick={() => {
                   setShowBackupDialog(true)
                   setShowMenu(false)
                 }}
-                className="w-full px-4 py-2 text-left text-gray-700 hover:bg-white/50 transition-colors flex items-center gap-3"
+                className="w-full px-3 sm:px-4 py-1.5 sm:py-2 text-left text-gray-700 hover:bg-white/50 transition-colors flex items-center gap-2 sm:gap-3"
               >
-                <span className="text-lg">💾</span>
-                <span className="font-medium">Säkerhetskopiera</span>
+                <span className="text-base sm:text-lg">💾</span>
+                <span className="font-medium text-sm sm:text-base">Säkerhetskopiera</span>
               </button>
               <button
                 onClick={() => {
@@ -1727,10 +1802,10 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
                   setIsEditMode(false)
                   setShowMenu(false)
                 }}
-                className="w-full px-4 py-2 text-left text-gray-700 hover:bg-white/50 transition-colors flex items-center gap-3"
+                className="w-full px-3 sm:px-4 py-1.5 sm:py-2 text-left text-gray-700 hover:bg-white/50 transition-colors flex items-center gap-2 sm:gap-3"
               >
-                <span className="text-lg">✏️</span>
-                <span className="font-medium">Hantera kategorier</span>
+                <span className="text-base sm:text-lg">✏️</span>
+                <span className="font-medium text-sm sm:text-base">Hantera kategorier</span>
               </button>
             </div>
           </div>
@@ -1747,6 +1822,11 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
           
           <button 
             onClick={() => {
+              // Prevent add marker during walking navigation
+              if (showWalkingDirection) {
+                return
+              }
+              
               if (isAddingMarker) {
                 setIsAddingMarker(false)
                 setPendingMarker(null)
@@ -1757,14 +1837,19 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
             className={`relative w-14 h-14 rounded-2xl text-white text-xl font-light shadow-2xl transition-all duration-300 transform backdrop-blur-sm border border-opacity-20 hover:scale-110 active:scale-95 ${
               isAddingMarker 
                 ? 'bg-gradient-to-br from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 rotate-45 border-red-300 animate-pulse' 
-                : 'bg-gradient-to-br from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 hover:shadow-3xl border-emerald-300 hover:animate-bounce'
+                : showWalkingDirection
+                  ? 'bg-gradient-to-br from-gray-400 to-gray-500 border-gray-300 opacity-50 cursor-not-allowed'
+                  : 'bg-gradient-to-br from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 hover:shadow-3xl border-emerald-300 hover:animate-bounce'
             }`}
             style={{
               boxShadow: isAddingMarker 
                 ? '0 20px 40px rgba(239, 68, 68, 0.3), 0 8px 16px rgba(239, 68, 68, 0.2)' 
-                : '0 20px 40px rgba(16, 185, 129, 0.3), 0 8px 16px rgba(16, 185, 129, 0.2)',
-              animation: !isAddingMarker ? 'float 3s ease-in-out infinite' : ''
+                : showWalkingDirection
+                  ? '0 10px 20px rgba(107, 114, 128, 0.3), 0 4px 8px rgba(107, 114, 128, 0.2)'
+                  : '0 20px 40px rgba(16, 185, 129, 0.3), 0 8px 16px rgba(16, 185, 129, 0.2)',
+              animation: !isAddingMarker && !showWalkingDirection ? 'float 3s ease-in-out infinite' : ''
             }}
+            title={showWalkingDirection ? "Inte tillgängligt under navigation" : (isAddingMarker ? "Avbryt" : "Lägg till fynd")}
           >
             <span className={`block transition-transform duration-300 ${isAddingMarker ? 'rotate-45' : ''}`}>
               +
@@ -1780,6 +1865,19 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
 
       {/* Floating Car Controls */}
       <div className="fixed bottom-28 right-8" style={{ zIndex: 10000 }}>
+        {/* Walking Navigation Cancel Button */}
+        {showWalkingDirection && (
+          <div className="mb-3">
+            <button 
+              onClick={hideWalkingDirection}
+              className="relative w-12 h-12 rounded-full shadow-lg transition-all duration-300 border-2 flex items-center justify-center bg-red-500 border-red-300 shadow-red-500/30 hover:shadow-red-500/50 active:scale-95 animate-pulse"
+              title="Avbryt navigation till fots"
+            >
+              <span className="text-lg leading-none">❌</span>
+            </button>
+          </div>
+        )}
+        
         {/* Main Car Button */}
         <button 
           onClick={toggleCarControls}
@@ -1791,8 +1889,9 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
                   ? 'bg-emerald-500 border-emerald-300 shadow-emerald-500/30'
                   : 'bg-blue-500 border-blue-300 shadow-blue-500/30 hover:shadow-blue-500/50'
                 : 'bg-red-500 border-red-300 shadow-red-500/30 hover:shadow-red-500/50'
-          } active:scale-95`}
+          } ${showWalkingDirection ? 'opacity-50 cursor-not-allowed' : ''} active:scale-95`}
           title={
+            showWalkingDirection ? "Inte tillgängligt under navigation" :
             isParkingMode ? "Avbryt parkering" :
             carLocation ? (showCarControls ? "Stäng bilkontroller" : "Öppna bilkontroller") : 
             "Parkera bil"
@@ -1965,31 +2064,34 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
                           }}
                           className="w-full p-3 text-left"
                         >
-                          <div className="flex items-center justify-between">
-                            {/* Left side - Name and abundance on same row */}
-                            <div className="flex items-center gap-3 flex-1">
-                              <div className="flex items-center gap-2">
+                          <div className="flex items-start justify-between gap-3">
+                            {/* Left side - Icon and Name */}
+                            <div className="flex items-center gap-2 flex-1 min-w-0">
+                              <div className="flex-shrink-0">
                                 {(() => {
                                   const category = categories.find(cat => cat.id === marker.category) || categories[0]
                                   return <span className="text-lg">{category.emoji}</span>
                                 })()}
-                                <span className="font-medium text-sm text-gray-800 hover:text-blue-600 transition-colors">
-                                  {marker.name}
-                                </span>
                               </div>
-                              <div className="flex items-center gap-1">
-                                {Array.from({length: 5}, (_, i) => (
-                                  <div 
-                                    key={i}
-                                    className={`w-1.5 h-1.5 rounded-full ${
-                                      i < (marker.abundance || 3) ? 'bg-green-500' : 'bg-gray-300'
-                                    }`}
-                                  />
-                                ))}
+                              <div className="min-w-0 flex-1">
+                                <div className="font-medium text-sm text-gray-800 hover:text-blue-600 transition-colors truncate">
+                                  {marker.name}
+                                </div>
+                                {/* Abundance dots below name */}
+                                <div className="flex items-center gap-1 mt-1">
+                                  {Array.from({length: 5}, (_, i) => (
+                                    <div 
+                                      key={i}
+                                      className={`w-1.5 h-1.5 rounded-full ${
+                                        i < (marker.abundance || 3) ? 'bg-green-500' : 'bg-gray-300'
+                                      }`}
+                                    />
+                                  ))}
+                                </div>
                               </div>
                             </div>
                             {/* Right side - Distance */}
-                            <div className="text-right">
+                            <div className="text-right flex-shrink-0">
                               {marker.distance !== null ? (
                                 <span className="text-sm font-medium text-blue-600">
                                   {formatDistance(marker.distance)}
@@ -2051,9 +2153,30 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
                     alert('Din position krävs för att visa riktning. Aktivera GPS först.')
                     return
                   }
+                  
                   setShowWalkingDirection(true)
                   setShowNavigationDialog(false)
-                  updateWalkingDirectionLine(true) // Enable zoom on initial setup
+                  
+                  // Zoom to show both user and target position immediately
+                  if (mapRef.current && navigationTarget) {
+                    const bounds = L.latLngBounds([
+                      [userLocation.lat, userLocation.lng],
+                      [navigationTarget.lat, navigationTarget.lng]
+                    ])
+                    
+                    // Fit bounds with padding
+                    mapRef.current.fitBounds(bounds, {
+                      padding: [50, 50],
+                      animate: true,
+                      duration: 1,
+                      maxZoom: 16
+                    })
+                  }
+                  
+                  // Draw line after a short delay to ensure state is updated
+                  setTimeout(() => {
+                    updateWalkingDirectionLine(false) // Don't zoom again since we just did
+                  }, 100)
                 }}
                 className="w-full p-4 rounded-xl bg-green-500 text-white hover:bg-green-600 active:scale-95 transition-all duration-200 flex items-center justify-center gap-3"
               >
@@ -2346,7 +2469,7 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
               
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Mängd svamp
+                  Mängd
                 </label>
                 <div className="flex justify-center space-x-2">
                   {[1, 2, 3, 4, 5].map((value) => (
@@ -2471,6 +2594,9 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
                 <div className="space-y-2">
                   <button
                     onClick={() => {
+                      // Clear any existing navigation first
+                      clearExistingNavigation()
+                      
                       setNavigationTarget(selectedMarker)
                       setShowMapsConfirmation(true)
                       setSelectedMarker(null)
@@ -2487,6 +2613,10 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
                         alert('Din position krävs för att visa riktning. Aktivera GPS först.')
                         return
                       }
+                      
+                      // Clear any existing navigation first
+                      clearExistingNavigation()
+                      
                       setNavigationTarget(selectedMarker)
                       setShowWalkingDirection(true)
                       setSelectedMarker(null)
@@ -2599,7 +2729,7 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
                 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Mängd svamp
+                    Mängd
                   </label>
                   <div className="flex justify-center space-x-2">
                     {[1, 2, 3, 4, 5].map((value) => (
@@ -2805,38 +2935,38 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
 
       {/* Category Management Dialog */}
       {showAddCategoryDialog && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-3xl max-w-lg w-full mx-4 shadow-2xl transform transition-all duration-300 max-h-[90vh] overflow-y-auto">
-            <div className="p-8">
-              <div className="flex items-center justify-between mb-6">
-                <h3 className="text-2xl font-bold text-gray-800">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[10001] p-2 sm:p-4">
+          <div className="bg-white rounded-2xl sm:rounded-3xl max-w-lg w-full mx-2 sm:mx-4 shadow-2xl transform transition-all duration-300 max-h-[95vh] sm:max-h-[90vh] overflow-y-auto">
+            <div className="p-4 sm:p-6 lg:p-8">
+              <div className="flex items-center justify-between mb-4 sm:mb-6">
+                <h3 className="text-lg sm:text-xl lg:text-2xl font-bold text-gray-800">
                   Hantera kategorier
                 </h3>
                 <button
                   onClick={cancelAddCategory}
-                  className="w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center transition-colors"
+                  className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center transition-colors text-sm sm:text-base"
                 >
                   ✕
                 </button>
               </div>
 
               {/* Existing Categories Section */}
-              <div className="mb-8">
-                <h4 className="text-lg font-semibold text-gray-800 mb-4">Befintliga kategorier</h4>
-                <div className="space-y-2 max-h-60 overflow-y-auto">
+              <div className="mb-6 sm:mb-8">
+                <h4 className="text-base sm:text-lg font-semibold text-gray-800 mb-3 sm:mb-4">Befintliga kategorier</h4>
+                <div className="space-y-2 max-h-48 sm:max-h-60 overflow-y-auto">
                   {categories.filter(cat => !DEFAULT_CATEGORIES.find(def => def.id === cat.id)).length === 0 ? (
-                    <p className="text-gray-500 italic text-center py-4">Inga anpassade kategorier än</p>
+                    <p className="text-gray-500 italic text-center py-3 sm:py-4 text-sm sm:text-base">Inga anpassade kategorier än</p>
                   ) : (
                     categories.filter(cat => !DEFAULT_CATEGORIES.find(def => def.id === cat.id)).map(category => (
-                      <div key={category.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                        <div className="flex items-center gap-3">
-                          <span className="text-xl">{category.emoji}</span>
-                          <span className="font-medium text-gray-800">{category.name}</span>
+                      <div key={category.id} className="flex items-center justify-between p-1.5 sm:p-2 bg-gray-50 rounded-lg">
+                        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+                          <span className="text-lg sm:text-xl flex-shrink-0">{category.emoji}</span>
+                          <span className="font-medium text-gray-800 text-sm sm:text-base truncate">{category.name}</span>
                         </div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
                           <button
                             onClick={() => startEditCategory(category)}
-                            className="px-3 py-1 bg-blue-500 text-white text-sm rounded-lg hover:bg-blue-600 transition-colors"
+                            className="px-2 py-1 sm:px-3 sm:py-1 bg-blue-500 text-white text-xs sm:text-sm rounded-md sm:rounded-lg hover:bg-blue-600 transition-colors"
                           >
                             Redigera
                           </button>
@@ -2857,7 +2987,7 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
                                 localStorage.setItem('svampkartan-markers', JSON.stringify(updatedMarkers))
                               }
                             }}
-                            className="px-3 py-1 bg-red-500 text-white text-sm rounded-lg hover:bg-red-600 transition-colors"
+                            className="px-2 py-1 sm:px-3 sm:py-1 bg-red-500 text-white text-xs sm:text-sm rounded-md sm:rounded-lg hover:bg-red-600 transition-colors"
                           >
                             Ta bort
                           </button>
@@ -2869,18 +2999,18 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
               </div>
 
               {/* Add/Edit Category Form */}
-              <div className="border-t pt-6">
-                <h4 className="text-lg font-semibold text-gray-800 mb-4">
+              <div className="border-t pt-4 sm:pt-6">
+                <h4 className="text-base sm:text-lg font-semibold text-gray-800 mb-3 sm:mb-4">
                   {isEditMode ? 'Redigera kategori' : 'Lägg till ny kategori'}
                 </h4>
                 
-                <div className="space-y-4">
+                <div className="space-y-3 sm:space-y-4">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                    <label className="block text-xs sm:text-sm font-medium text-gray-700 mb-1">
                       Kategorinamn *
                     </label>
                     <div className="flex items-center gap-2">
-                      <div className="w-10 h-10 border border-gray-300 rounded-md flex items-center justify-center bg-gray-50 text-lg">
+                      <div className="w-8 h-8 sm:w-10 sm:h-10 border border-gray-300 rounded-md flex items-center justify-center bg-gray-50 text-base sm:text-lg flex-shrink-0">
                         {newCategoryForm.emoji}
                       </div>
                       <input
@@ -2888,22 +3018,24 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
                         value={newCategoryForm.name}
                         onChange={(e) => setNewCategoryForm({ ...newCategoryForm, name: e.target.value })}
                         placeholder="t.ex. Medicinsk, Giftig..."
-                        className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500"
+                        className="flex-1 px-2 py-2 sm:px-3 sm:py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500 text-sm sm:text-base"
                       />
                     </div>
                   </div>
 
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                    <label className="block text-xs sm:text-sm font-medium text-gray-700 mb-2">
                       Välj emoji
                     </label>
-                    <div className="flex flex-wrap gap-2">
+                    <div className="flex flex-wrap gap-1 sm:gap-2">
                       {['🍄', '💀', '⭐',  '❓', '🍓', '🔴', '🟠', '🟡', '🟢', '🔵', '🟣'].map(emoji => (
                         <button
                           key={emoji}
                           type="button"
                           onClick={() => setNewCategoryForm({ ...newCategoryForm, emoji })}
-                          className="w-8 h-8 text-lg hover:bg-gray-100 rounded border border-gray-200 flex items-center justify-center transition-colors"
+                          className={`w-7 h-7 sm:w-8 sm:h-8 text-sm sm:text-lg hover:bg-gray-100 rounded border transition-colors flex items-center justify-center ${
+                            newCategoryForm.emoji === emoji ? 'border-green-500 bg-green-50' : 'border-gray-200'
+                          }`}
                         >
                           {emoji}
                         </button>
@@ -2912,7 +3044,7 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
                   </div>
                 </div>
 
-                <div className="flex gap-3 mt-6">
+                <div className="flex flex-col sm:flex-row gap-2 sm:gap-3 mt-4 sm:mt-6">
                   <button
                     onClick={() => {
                       if (isEditMode) {
@@ -2922,14 +3054,14 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
                         cancelAddCategory()
                       }
                     }}
-                    className="flex-1 bg-gradient-to-r from-gray-500 to-gray-600 text-white py-3 px-6 rounded-xl font-medium hover:from-gray-600 hover:to-gray-700 transition-all duration-200 shadow-lg"
+                    className="order-2 sm:order-1 flex-1 bg-gradient-to-r from-gray-500 to-gray-600 text-white py-2 sm:py-3 px-4 sm:px-6 rounded-lg sm:rounded-xl font-medium hover:from-gray-600 hover:to-gray-700 transition-all duration-200 shadow-lg text-sm sm:text-base"
                   >
                     {isEditMode ? 'Avbryt redigering' : 'Stäng'}
                   </button>
                   <button
                     onClick={addNewCategory}
                     disabled={!newCategoryForm.name.trim()}
-                    className="flex-1 bg-gradient-to-r from-green-500 to-green-600 text-white py-3 px-6 rounded-xl font-medium hover:from-green-600 hover:to-green-700 transition-all duration-200 shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="order-1 sm:order-2 flex-1 bg-gradient-to-r from-green-500 to-green-600 text-white py-2 sm:py-3 px-4 sm:px-6 rounded-lg sm:rounded-xl font-medium hover:from-green-600 hover:to-green-700 transition-all duration-200 shadow-lg disabled:opacity-50 disabled:cursor-not-allowed text-sm sm:text-base"
                   >
                     {isEditMode ? 'Spara ändringar' : 'Lägg till kategori'}
                   </button>
