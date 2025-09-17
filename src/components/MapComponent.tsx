@@ -75,13 +75,16 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
   const [showMapsConfirmation, setShowMapsConfirmation] = useState(false)
   const [currentMapType, setCurrentMapType] = useState<'mml-topo' | 'mml-satellite' | 'opentopo' | 'lantmateriet' | 'lantmateriet-satellite'>(() => {
     // Load saved map type from localStorage, default to 'opentopo' if not found
-    try {
-      const savedMapType = localStorage.getItem('svampkartan-map-type')
-      if (savedMapType && ['mml-topo', 'mml-satellite', 'opentopo', 'lantmateriet', 'lantmateriet-satellite'].includes(savedMapType)) {
-        return savedMapType as 'mml-topo' | 'mml-satellite' | 'opentopo' | 'lantmateriet' | 'lantmateriet-satellite'
+    // Only access localStorage in the browser (not during SSR)
+    if (typeof window !== 'undefined') {
+      try {
+        const savedMapType = localStorage.getItem('svampkartan-map-type')
+        if (savedMapType && ['mml-topo', 'mml-satellite', 'opentopo', 'lantmateriet', 'lantmateriet-satellite'].includes(savedMapType)) {
+          return savedMapType as 'mml-topo' | 'mml-satellite' | 'opentopo' | 'lantmateriet' | 'lantmateriet-satellite'
+        }
+      } catch (error) {
+        console.log('Could not load saved map type:', error)
       }
-    } catch (error) {
-      console.log('Could not load saved map type:', error)
     }
     return 'opentopo'
   })
@@ -99,6 +102,18 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
   const [editingCategory, setEditingCategory] = useState<any>(null)
   const [isEditMode, setIsEditMode] = useState(false)
 
+  // Welcome popup state (only show once)
+  const [showWelcome, setShowWelcome] = useState(false)
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const hasSeenWelcome = localStorage.getItem('hasSeenWelcomePopup')
+      if (!hasSeenWelcome) {
+        setShowWelcome(true)
+        localStorage.setItem('hasSeenWelcomePopup', 'true')
+      }
+    }
+  }, [])
+
   // Calculate dynamic sizes based on zoom level
   const getZoomBasedSizes = (zoom: number) => {
     // Base sizes at zoom level 13
@@ -107,7 +122,7 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
     
     return {
       fontSize: Math.max(10, Math.min(16, 13 * scaleFactor)),
-      padding: Math.max(6, Math.min(16, 10 * scaleFactor)),
+      padding: Math.max(2, Math.min(6, 4 * scaleFactor)), // Much smaller padding for compact boxes
       dotSize: Math.max(3, Math.min(7, 5 * scaleFactor)),
       pinSize: Math.max(8, Math.min(16, 12 * scaleFactor))
     }
@@ -166,11 +181,11 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
       return
     }
 
-    // First, try to get immediate position with relaxed settings
+    // Try high accuracy first with short timeout, then fallback quickly
     navigator.geolocation.getCurrentPosition(
       (position) => {
         const { latitude, longitude, accuracy } = position.coords
-        console.log('Got location:', latitude, longitude, 'accuracy:', accuracy)
+        console.log('Got precise location:', latitude, longitude, 'accuracy:', accuracy)
         setUserLocation({ lat: latitude, lng: longitude })
         setLocationStatus('found')
         
@@ -189,9 +204,9 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
         startLocationWatch()
       },
       (error) => {
-        console.log('First attempt failed, trying with lower accuracy...', error.message)
+        console.log('High accuracy failed quickly, trying low accuracy...', error.message)
         
-        // Retry with less strict settings
+        // Quick fallback to low accuracy
         navigator.geolocation.getCurrentPosition(
           (position) => {
             const { latitude, longitude, accuracy } = position.coords
@@ -222,7 +237,7 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
       },
       {
         enableHighAccuracy: true,
-        timeout: 10000,              // Shorter initial timeout
+        timeout: 5000,               // Short timeout - fail fast if GPS is slow
         maximumAge: 60000
       }
     )
@@ -644,6 +659,11 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
     setShowWalkingDirection(false)
     setNavigationTarget(null)
     setCurrentNavigationDistance(null)
+    // Force map redraw to ensure all markers reappear immediately
+    if (mapRef.current) {
+      mapRef.current.invalidateSize();
+      mapRef.current.setView(mapRef.current.getCenter());
+    }
   }
 
   // Clear any existing navigation state
@@ -679,7 +699,7 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
     if (showWalkingDirection && userLocation && navigationTarget) {
       // Throttle updates to avoid lag during zoom
       const throttleTimeout = setTimeout(() => {
-        updateWalkingDirectionLine(false) // Don't zoom on location updates
+        updateWalkingDirectionLine(true) // Always zoom to fit both positions
       }, 200) // 200ms throttle
       
       return () => clearTimeout(throttleTimeout)
@@ -798,13 +818,13 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
     return colorMap[category.color as keyof typeof colorMap] || colorMap.green
   }
 
-  // Auto-request location when map loads
+  // Auto-request location when map loads (background, after showing latest find)
   useEffect(() => {
     if (mapRef.current && L) {
-      // Small delay to let map settle
+      // Longer delay to let latest find navigation complete first
       setTimeout(() => {
         requestLocation()
-      }, 1000)
+      }, 2500) // Give time for latest find navigation to finish
     }
   }, [mapRef.current, L])
 
@@ -881,20 +901,35 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
               const tapGap = currentTime - lastTapTime
               
               if (tapGap < 300 && tapGap > 0) {
-                // Double tap detected - start zoom mode
+                // Quick double tap: zoom in one level
+                if (!isDoubleTapHolding) {
+                  // Zoom in by 2 levels and center on tap location
+                  const clientX = e.touches[0].clientX;
+                  const clientY = e.touches[0].clientY;
+                  const containerPoint = map.mouseEventToContainerPoint({
+                    clientX,
+                    clientY,
+                    target: e.target,
+                    type: 'touchstart',
+                    // ...other properties if needed
+                  });
+                  const latlng = map.containerPointToLatLng(containerPoint);
+                  map.setView(latlng, map.getZoom() + 1.5, { animate: true });
+                  e.preventDefault();
+                  lastTapTime = 0;
+                  if (doubleTapTimer) clearTimeout(doubleTapTimer);
+                  return;
+                }
+                // Double tap detected - start zoom mode (hold)
                 isDoubleTapHolding = true
                 touchStartY = e.touches[0].clientY
                 touchStartZoom = map.getZoom()
                 e.preventDefault() // Only prevent for double tap
-                
-                // Clear any existing timer
                 if (doubleTapTimer) clearTimeout(doubleTapTimer)
               } else {
                 // First tap or too much time passed - don't prevent default for single taps
                 lastTapTime = currentTime
                 isDoubleTapHolding = false
-                
-                // Set timer to reset if no second tap comes
                 doubleTapTimer = setTimeout(() => {
                   lastTapTime = 0
                 }, 300)
@@ -1048,6 +1083,25 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
           mapRef.current = map
           setIsMapLoaded(true)
           
+          // Navigate to latest find if available
+          if (markers.length > 0) {
+            // Sort markers by creation date (most recent first)
+            const sortedMarkers = [...markers].sort((a, b) => {
+              const timeA = new Date(a.date).getTime()
+              const timeB = new Date(b.date).getTime()
+              return timeB - timeA
+            })
+            
+            const latestFind = sortedMarkers[0]
+            console.log('Navigating to latest find:', latestFind.name)
+            
+            // Center map on latest find with appropriate zoom
+            map.setView([latestFind.lat, latestFind.lng], 14, {
+              animate: true,
+              duration: 1.5
+            })
+          }
+          
           // Force map to render properly
           setTimeout(() => {
             map.invalidateSize()
@@ -1098,7 +1152,7 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
       const sizes = getZoomBasedSizes(mapZoom)
       const categoryColors = getCategoryColors(marker.category || 'edible')
       
-      // Create modern sleek marker design with dynamic sizing and hover animations
+      // Create modern sleek marker design with FIXED sizing for accurate positioning
       const mushroomIcon = L.divIcon({
         html: `
           <style>
@@ -1122,7 +1176,6 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
             flex-direction: column; 
             align-items: center; 
             cursor: pointer;
-            transform: translateY(-50%);
             filter: drop-shadow(0 8px 16px rgba(0,0,0,0.15));
           ">
             <!-- Modern Pin with integrated info -->
@@ -1132,7 +1185,7 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
                 rgba(248, 250, 252, 0.9) 50%,
                 ${categoryColors.secondary} 100%);
               border: 1px solid ${categoryColors.accent};
-              padding: ${sizes.padding}px 14px;
+              padding: 4px 14px;
               position: relative;
               backdrop-filter: blur(20px) saturate(180%);
               box-shadow: 
@@ -1143,26 +1196,13 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
               transform: perspective(100px) rotateX(2deg);
               transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
             ">
-              <!-- Subtle top highlight -->
-              <div style="
-                position: absolute;
-                top: 1px;
-                left: 8px;
-                right: 8px;
-                height: 1px;
-                background: linear-gradient(90deg, 
-                  transparent 0%, 
-                  rgba(255,255,255,0.5) 50%, 
-                  transparent 100%);
-                border-radius: 1px;
-              "></div>
               
               <!-- Name with modern typography -->
               <div style="
-                font-size: ${sizes.fontSize}px;
+                font-size: 13px;
                 font-weight: 600;
                 color: #1e293b;
-                margin-bottom: 6px;
+                margin-bottom: 2px;
                 letter-spacing: -0.3px;
                 text-align: center;
                 text-shadow: 0 1px 2px rgba(255,255,255,0.8);
@@ -1174,12 +1214,12 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
                 display: flex;
                 justify-content: center;
                 gap: 3px;
-                margin-bottom: 2px;
+                margin-bottom: 0px;
               ">
                 ${Array.from({length: 5}, (_, i) => `
                   <div style="
-                    width: ${sizes.dotSize}px;
-                    height: ${sizes.dotSize}px;
+                    width: 5px;
+                    height: 5px;
                     border-radius: 50%;
                     background: ${i < (marker.abundance || 3) 
                       ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)' 
@@ -1191,58 +1231,24 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
                   "></div>
                 `).join('')}
               </div>
-              
-              <!-- Modern pointer tail with depth -->
-              <div style="
-                position: absolute;
-                bottom: -9px;
-                left: 50%;
-                transform: translateX(-50%);
-                width: 16px;
-                height: 16px;
-                background: linear-gradient(135deg, 
-                  rgba(255, 255, 255, 0.95) 0%, 
-                  rgba(236, 253, 245, 0.85) 100%);
-                border: 1px solid rgba(16, 185, 129, 0.15);
-                border-top: none;
-                border-left: none;
-                transform: translateX(-50%) rotate(45deg);
-                box-shadow: 
-                  2px 2px 4px rgba(0, 0, 0, 0.06),
-                  inset -1px -1px 1px rgba(255, 255, 255, 0.8);
-              "></div>
             </div>
             
-            <!-- Enhanced pin point -->
+            <!-- Arrow-shaped pin point -->
             <div style="
-              width: ${sizes.pinSize}px;
-              height: ${sizes.pinSize}px;
-              background: linear-gradient(135deg, #8b5a2b 0%, #a0522d 100%);
-              border: 3px solid rgba(255, 255, 255, 0.95);
-              border-radius: 50%;
-              box-shadow: 
-                0 4px 12px rgba(139, 90, 43, 0.25),
-                0 2px 4px rgba(0, 0, 0, 0.1),
-                inset 0 1px 1px rgba(255, 255, 255, 0.3);
+              width: 0;
+              height: 0;
+              border-left: 6px solid transparent;
+              border-right: 6px solid transparent;
+              border-top: 12px solid #dc2626;
               margin-top: 2px;
               position: relative;
+              filter: drop-shadow(0 4px 8px rgba(220, 38, 38, 0.3));
             ">
-              <!-- Inner highlight -->
-              <div style="
-                position: absolute;
-                top: 1px;
-                left: 1px;
-                width: 4px;
-                height: 4px;
-                background: rgba(255, 255, 255, 0.4);
-                border-radius: 50%;
-              "></div>
-            </div>
           </div>
         `,
         className: 'mushroom-icon-with-label',
-        iconSize: [Math.max(120, marker.name.length * 8 + 40), 60], // Dynamic width based on text length
-        iconAnchor: [Math.max(60, (marker.name.length * 8 + 40) / 2), 30] // Center the icon
+        iconSize: [120, 50], // Completely fixed size
+        iconAnchor: [60, 48] // Completely fixed anchor pointing to arrow tip
       })
       
       const leafletMarker = L.marker([marker.lat, marker.lng], { icon: mushroomIcon })
@@ -1296,10 +1302,10 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
   useEffect(() => {
     if (!mapRef.current || !L) return
 
-    let longPressTimer: NodeJS.Timeout
-    let isLongPressing = false
-    let startPosition: { x: number, y: number } | null = null
-    let startLatLng: { lat: number, lng: number } | null = null
+  let longPressTimer: NodeJS.Timeout
+  let isLongPressing = false
+  let startPosition: { x: number, y: number } | null = null
+  let startLatLng: { lat: number, lng: number } | null = null
 
     const handlePointerDown = (e: TouchEvent | MouseEvent) => {
       // Don't trigger long press if we're already in adding mode or parking mode
@@ -1330,11 +1336,12 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
         if (navigator.vibrate) {
           navigator.vibrate(50)
         }
-        // Set pending marker at long press location
+        // Set pending marker at long press location and open add dialog
         if (startLatLng) {
           setPendingMarker({ lat: startLatLng.lat, lng: startLatLng.lng })
+          setIsAddingMarker(true)
         }
-      }, 2000) // 2 seconds
+      }, 1000) // 1000 milliseconds
     }
 
     const handlePointerUp = (e: TouchEvent | MouseEvent) => {
@@ -1361,8 +1368,8 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
             Math.pow(clientY - startPosition.y, 2)
           )
           
-          // Cancel if moved more than 15 pixels
-          if (moveDistance > 15) {
+          // Cancel if moved more than 25 pixels (more forgiving on mobile)
+          if (moveDistance > 25) {
             console.log('Long press: cancelled due to movement') // Debug log
             clearTimeout(longPressTimer)
             isLongPressing = false
@@ -1374,12 +1381,12 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
     // Use DOM events directly instead of Leaflet events to avoid conflicts
     const mapContainer = mapRef.current.getContainer()
     
-    mapContainer.addEventListener('mousedown', handlePointerDown as EventListener)
-    mapContainer.addEventListener('touchstart', handlePointerDown as EventListener, { passive: false })
-    mapContainer.addEventListener('mouseup', handlePointerUp as EventListener)
-    mapContainer.addEventListener('touchend', handlePointerUp as EventListener)
-    mapContainer.addEventListener('mousemove', handlePointerMove as EventListener)
-    mapContainer.addEventListener('touchmove', handlePointerMove as EventListener)
+  mapContainer.addEventListener('mousedown', handlePointerDown as EventListener, { passive: false })
+  mapContainer.addEventListener('touchstart', handlePointerDown as EventListener, { passive: false })
+  mapContainer.addEventListener('mouseup', handlePointerUp as EventListener, { passive: false })
+  mapContainer.addEventListener('touchend', handlePointerUp as EventListener, { passive: false })
+  mapContainer.addEventListener('mousemove', handlePointerMove as EventListener, { passive: false })
+  mapContainer.addEventListener('touchmove', handlePointerMove as EventListener, { passive: false })
 
     return () => {
       if (longPressTimer) {
@@ -1459,13 +1466,16 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
       requestLocation()
       // Set a timeout to check if location is available
       setTimeout(() => {
-        const currentLocation = userLocation
-        if (currentLocation) {
-          setPendingMarker({ lat: currentLocation.lat, lng: currentLocation.lng })
-        } else {
-          alert('Kunde inte hämta din position. Klicka på kartan istället.')
-          setIsAddingMarker(true)
-        }
+        // Use a function to get the latest state
+        setUserLocation((currentUserLocation) => {
+          if (currentUserLocation) {
+            setPendingMarker({ lat: currentUserLocation.lat, lng: currentUserLocation.lng })
+          } else {
+            alert('Kunde inte hämta din position. Klicka på kartan istället.')
+            setIsAddingMarker(true)
+          }
+          return currentUserLocation // Don't change the state
+        })
       }, 2000)
     }
   }
@@ -1812,6 +1822,22 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
         )}
       </div>
 
+      {/* Welcome Popup - Only shows once */}
+      {showWelcome && (
+        <div className="fixed inset-0 z-[20000] flex items-center justify-center bg-black/40 backdrop-blur-sm">
+          <div className="bg-white rounded-3xl shadow-2xl p-8 max-w-xs w-full text-center border border-emerald-200 animate-fade-in">
+            <div className="text-5xl mb-3">🍄</div>
+            <h2 className="text-xl font-bold text-emerald-700 mb-2">Välkommen till Min Svamp- och bärkarta!</h2>
+            <p className="text-gray-700 mb-4 text-base">Vid problem, kontakta mig på de uppgifter som finns på fliken: <b>Om appen</b>.</p>
+            <button
+              className="mt-2 px-6 py-2 rounded-xl bg-emerald-500 text-white font-semibold shadow hover:bg-emerald-600 transition"
+              onClick={() => setShowWelcome(false)}
+            >
+              Starta kartan
+            </button>
+          </div>
+        </div>
+      )}
       {/* Floating Add Button - Enhanced Animations */}
       <div className="fixed bottom-8 right-8" style={{ zIndex: 10000 }}>
         <div className="relative">
@@ -2292,12 +2318,10 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
         {/* Main Map Button */}
         <button 
           onClick={() => setShowMapSelector(!showMapSelector)}
-          className="relative w-12 h-12 rounded-full shadow-lg transition-all duration-300 border-2 bg-white/90 border-gray-300 shadow-gray-500/30 hover:shadow-gray-500/50 flex items-center justify-center active:scale-95"
+          className="relative w-12 h-12 rounded-full shadow-lg transition-all duration-300 border-2 bg-orange-500/90 border-orange-600 shadow-orange-500/30 hover:shadow-orange-500/50 flex items-center justify-center active:scale-95"
           title="Ändra karttyp"
         >
-          <svg className="w-6 h-6 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
-          </svg>
+          <span className="text-1xl leading-none">🌍</span>
         </button>
 
         {/* Map Type Selection Panel - only show when controls are open */}
@@ -2314,7 +2338,7 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
                   : 'bg-white/80 text-gray-700 border border-gray-300 hover:bg-white/90'
               }`}
             >
-              OpenTopoMap (Contours)
+              OpenTopo
             </button>
             <button 
               onClick={() => {
@@ -2327,7 +2351,7 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
                   : 'bg-white/80 text-gray-700 border border-gray-300 hover:bg-white/90'
               }`}
             >
-              MML Topographic (Finland)
+              MML Topo (FIN)
             </button>
             <button 
               onClick={() => {
@@ -2340,7 +2364,7 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
                   : 'bg-white/80 text-gray-700 border border-gray-300 hover:bg-white/90'
               }`}
             >
-              MML Satellite (Finland)
+              MML Satellite (FIN)
             </button>
             <button 
               onClick={() => {
@@ -2353,7 +2377,7 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
                   : 'bg-white/80 text-gray-700 border border-gray-300 hover:bg-white/90'
               }`}
             >
-              Lantmäteriet (Sweden)
+              Lantmäteriet Topo (SWE)
             </button>
             <button 
               onClick={() => {
@@ -2366,8 +2390,7 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
                   : 'bg-white/80 text-gray-700 border border-gray-300 hover:bg-white/90'
               }`}
             >
-              Lantmäteriet Aerial
-            </button>
+              Lantmäteriet Satellite (SWE)            </button>
           </div>
         )}
       </div>
@@ -2958,17 +2981,18 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
                     <p className="text-gray-500 italic text-center py-3 sm:py-4 text-sm sm:text-base">Inga anpassade kategorier än</p>
                   ) : (
                     categories.filter(cat => !DEFAULT_CATEGORIES.find(def => def.id === cat.id)).map(category => (
-                      <div key={category.id} className="flex items-center justify-between p-1.5 sm:p-2 bg-gray-50 rounded-lg">
-                        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-                          <span className="text-lg sm:text-xl flex-shrink-0">{category.emoji}</span>
+                      <div key={category.id} className="flex items-center justify-between py-0.5 px-2 sm:p-2 bg-gray-50 rounded-lg min-w-0">
+                        <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
+                          <span className="text-base sm:text-xl flex-shrink-0">{category.emoji}</span>
                           <span className="font-medium text-gray-800 text-sm sm:text-base truncate">{category.name}</span>
                         </div>
                         <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
                           <button
                             onClick={() => startEditCategory(category)}
-                            className="px-2 py-1 sm:px-3 sm:py-1 bg-blue-500 text-white text-xs sm:text-sm rounded-md sm:rounded-lg hover:bg-blue-600 transition-colors"
+                            className="w-10 h-2 sm:px-3 sm:py-1 bg-blue-500 text-white text-xs sm:text-sm rounded sm:rounded-lg hover:bg-blue-600 transition-colors flex items-center justify-center"
                           >
-                            Redigera
+                            <span className="sm:hidden text-xs">✏️</span>
+                            <span className="hidden sm:inline">Redigera</span>
                           </button>
                           <button
                             onClick={() => {
@@ -2987,9 +3011,10 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
                                 localStorage.setItem('svampkartan-markers', JSON.stringify(updatedMarkers))
                               }
                             }}
-                            className="px-2 py-1 sm:px-3 sm:py-1 bg-red-500 text-white text-xs sm:text-sm rounded-md sm:rounded-lg hover:bg-red-600 transition-colors"
+                            className="w-10 h-2 sm:px-3 sm:py-1 bg-red-500 text-white text-xs sm:text-sm rounded sm:rounded-lg hover:bg-red-600 transition-colors flex items-center justify-center"
                           >
-                            Ta bort
+                            <span className="sm:hidden text-xs">🗑️</span>
+                            <span className="hidden sm:inline">Ta bort</span>
                           </button>
                         </div>
                       </div>
@@ -3017,8 +3042,8 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
                         type="text"
                         value={newCategoryForm.name}
                         onChange={(e) => setNewCategoryForm({ ...newCategoryForm, name: e.target.value })}
-                        placeholder="t.ex. Medicinsk, Giftig..."
-                        className="flex-1 px-2 py-2 sm:px-3 sm:py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500 text-sm sm:text-base"
+                        placeholder="t.ex. Medicinsk..."
+                        className="flex-1 min-w-0 px-2 py-2 sm:px-3 sm:py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500 text-sm sm:text-base"
                       />
                     </div>
                   </div>

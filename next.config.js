@@ -1,4 +1,5 @@
 /** @type {import('next').NextConfig} */
+const repoName = 'svampkartan'; // Change if your repo name is different
 const nextConfig = {
   typescript: {
     ignoreBuildErrors: true,
@@ -6,12 +7,13 @@ const nextConfig = {
   eslint: {
     ignoreDuringBuilds: true,
   },
-  // Try static export for better compatibility
   output: 'export',
   trailingSlash: true,
   images: {
     unoptimized: true
-  }
+  },
+  basePath: `/${repoName}`,
+  assetPrefix: `/${repoName}/`,
 }
 
 module.exports = nextConfig
