@@ -35,6 +35,9 @@ jobs:
       - name: Install Capacitor Android
         run: npm install @capacitor/android
 
+      - name: Install Capacitor CLI globally
+        run: npm install -g @capacitor/cli
+
       - name: Init Capacitor Android (if needed)
         run: |
           npx cap sync android
