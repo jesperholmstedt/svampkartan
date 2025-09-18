@@ -31,10 +31,9 @@ jobs:
 
       - name: Build Next.js static site for Android
         run: |
-          # Bygg Next.js utan basePath/assetPrefix för Android WebView
+          # Ta bort basePath och assetPrefix temporärt för Android WebView
           cp next.config.js next.config.js.bak
-          npx json -I -f package.json -e 'this.scripts.build="next build"'
-          echo "/** @type {import('next').NextConfig} */\nmodule.exports = { output: 'export', images: { unoptimized: true }, typescript: { ignoreBuildErrors: true }, eslint: { ignoreDuringBuilds: true } }" > next.config.js
+          sed '/basePath/d;/assetPrefix/d' next.config.js.bak > next.config.js
           npm run build
           mv next.config.js.bak next.config.js
 
