@@ -85,3 +85,16 @@ jobs:
         with:
           name: app-debug.apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
+
+        - name: Install ImageMagick
+          run: sudo apt-get update && sudo apt-get install -y imagemagick
+
+        - name: Generate Android launcher icons from SVG
+          run: |
+            convert public/icon-192.svg -resize 48x48 android/app/src/main/res/mipmap-mdpi/ic_launcher_foreground.png
+            convert public/icon-192.svg -resize 72x72 android/app/src/main/res/mipmap-hdpi/ic_launcher_foreground.png
+            convert public/icon-192.svg -resize 96x96 android/app/src/main/res/mipmap-xhdpi/ic_launcher_foreground.png
+            convert public/icon-192.svg -resize 144x144 android/app/src/main/res/mipmap-xxhdpi/ic_launcher_foreground.png
+            convert public/icon-192.svg -resize 192x192 android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_foreground.png
+            # För adaptive icons (v26+)
+            convert public/icon-192.svg -resize 192x192 android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_foreground.png
