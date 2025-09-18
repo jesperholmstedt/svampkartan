@@ -50,6 +50,10 @@ jobs:
 
       - name: Build APK with Gradle
         run: |
+          export JAVA_HOME="/usr/lib/jvm/temurin-17-jdk-amd64"
+          export PATH="$JAVA_HOME/bin:$PATH"
+          export JAVA_TOOL_OPTIONS="-Dorg.gradle.java.home=/usr/lib/jvm/temurin-17-jdk-amd64"
+          java -version
           cd android
           ./gradlew assembleDebug
 
