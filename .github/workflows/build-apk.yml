@@ -10,10 +10,10 @@
           convert public/icon-192.svg -resize 192x192 android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_foreground.png
           # För adaptive icons (v26+)
           convert public/icon-192.svg -resize 192x192 android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_foreground.png
-# This GitHub Actions workflow builds your Android APK in the cloud and uploads it as an artifact.
-# Place this file in .github/workflows/build-apk.yml in your repo.
 
 name: Build Android APK
+# This GitHub Actions workflow builds your Android APK in the cloud and uploads it as an artifact.
+# Place this file in .github/workflows/build-apk.yml in your repo.
 
 on:
   workflow_dispatch:
