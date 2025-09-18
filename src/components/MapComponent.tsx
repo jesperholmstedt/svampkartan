@@ -1,3 +1,4 @@
+import { Geolocation } from '@capacitor/geolocation';
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
@@ -173,104 +174,50 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
   }, [markers])
 
   // Comprehensive location management
-  const requestLocation = () => {
+  const requestLocation = async () => {
     setLocationStatus('locating')
-    
-    if (!navigator.geolocation) {
-      setLocationStatus('error')
-      return
-    }
-
-    // Try high accuracy first with short timeout, then fallback quickly
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        const { latitude, longitude, accuracy } = position.coords
-        console.log('Got precise location:', latitude, longitude, 'accuracy:', accuracy)
-        setUserLocation({ lat: latitude, lng: longitude })
-        setLocationStatus('found')
-        
-        // Update or create user marker
-        updateUserMarker(latitude, longitude)
-        
-        // Zoom map to user location
-        if (mapRef.current) {
-          mapRef.current.setView([latitude, longitude], 15, {
-            animate: true,
-            duration: 1
-          })
-        }
-        
-        // Start watching for location changes
-        startLocationWatch()
-      },
-      (error) => {
-        console.log('High accuracy failed quickly, trying low accuracy...', error.message)
-        
-        // Quick fallback to low accuracy
-        navigator.geolocation.getCurrentPosition(
-          (position) => {
-            const { latitude, longitude, accuracy } = position.coords
-            console.log('Got location on retry:', latitude, longitude, 'accuracy:', accuracy)
-            setUserLocation({ lat: latitude, lng: longitude })
-            setLocationStatus('found')
-            updateUserMarker(latitude, longitude)
-            
-            if (mapRef.current) {
-              mapRef.current.setView([latitude, longitude], 15, {
-                animate: true,
-                duration: 1
-              })
-            }
-            
-            startLocationWatch()
-          },
-          (retryError) => {
-            console.log('Retry also failed:', retryError.message)
-            handleLocationError(retryError)
-          },
-          {
-            enableHighAccuracy: false,  // Less strict
-            timeout: 30000,             // Longer timeout
-            maximumAge: 300000          // Accept older location (5 min)
-          }
-        )
-      },
-      {
-        enableHighAccuracy: true,
-        timeout: 5000,               // Short timeout - fail fast if GPS is slow
-        maximumAge: 60000
+    try {
+      await Geolocation.requestPermissions();
+      const position = await Geolocation.getCurrentPosition({ enableHighAccuracy: true });
+      const { latitude, longitude, accuracy } = position.coords;
+      console.log('Got precise location:', latitude, longitude, 'accuracy:', accuracy);
+      setUserLocation({ lat: latitude, lng: longitude });
+      setLocationStatus('found');
+      updateUserMarker(latitude, longitude);
+      if (mapRef.current) {
+        mapRef.current.setView([latitude, longitude], 15, {
+          animate: true,
+          duration: 1
+        });
       }
-    )
+      startLocationWatch();
+    } catch (error: any) {
+      console.log('Geolocation error:', error.message);
+      handleLocationError(error);
+    }
   }
 
   const startLocationWatch = () => {
-    if (navigator.geolocation && !watchId) {
-      const id = navigator.geolocation.watchPosition(
-        (position) => {
-          const { latitude, longitude, accuracy } = position.coords
-          console.log('Location update:', latitude, longitude, 'accuracy:', accuracy)
-          setUserLocation({ lat: latitude, lng: longitude })
-          
-          // Update user marker on map
-          updateUserMarker(latitude, longitude)
-        },
-        (error) => {
-          console.log('watchPosition error:', error)
-        },
-        {
-          enableHighAccuracy: true,
-          timeout: 30000,
-          maximumAge: 30000
+    if (!watchId) {
+      const id = Geolocation.watchPosition({ enableHighAccuracy: true }, (position, error) => {
+        if (position) {
+          const { latitude, longitude, accuracy } = position.coords;
+          console.log('Location update:', latitude, longitude, 'accuracy:', accuracy);
+          setUserLocation({ lat: latitude, lng: longitude });
+          updateUserMarker(latitude, longitude);
         }
-      )
-      setWatchId(id)
+        if (error) {
+          console.log('watchPosition error:', error);
+        }
+      });
+      setWatchId(id);
     }
   }
 
   const stopLocationWatch = () => {
     if (watchId) {
-      navigator.geolocation.clearWatch(watchId)
-      setWatchId(null)
+      Geolocation.clearWatch({ id: watchId });
+      setWatchId(null);
     }
   }
 
