@@ -38,11 +38,11 @@ jobs:
       - name: Install Capacitor CLI globally
         run: npm install -g @capacitor/cli
 
-      - name: Add Capacitor Android platform
-        run: npx cap add android
-
-      - name: Init Capacitor Android (if needed)
+      - name: Ensure Capacitor Android platform exists
         run: |
+          if [ ! -d "android" ]; then
+            npx cap add android
+          fi
           npx cap sync android
 
       - name: Build APK with Gradle
