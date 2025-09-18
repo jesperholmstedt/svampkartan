@@ -55,7 +55,8 @@ jobs:
           export JAVA_TOOL_OPTIONS="-Dorg.gradle.java.home=/usr/lib/jvm/temurin-17-jdk-amd64"
           java -version
           cd android
-          ./gradlew assembleDebug
+          ./gradlew clean
+          ./gradlew assembleDebug --no-daemon --refresh-dependencies
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
