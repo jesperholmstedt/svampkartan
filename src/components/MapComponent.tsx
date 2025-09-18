@@ -1,5 +1,6 @@
+
+'use client';
 import { Geolocation } from '@capacitor/geolocation';
-'use client'
 
 import { useState, useEffect, useRef } from 'react'
 import 'leaflet/dist/leaflet.css'
