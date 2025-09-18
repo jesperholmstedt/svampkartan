@@ -29,8 +29,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build Next.js static site
-        run: npm run build
+      - name: Build Next.js static site for Android
+        run: |
+          # Bygg Next.js utan basePath/assetPrefix för Android WebView
+          cp next.config.js next.config.js.bak
+          npx json -I -f package.json -e 'this.scripts.build="next build"'
+          echo "/** @type {import('next').NextConfig} */\nmodule.exports = { output: 'export', images: { unoptimized: true }, typescript: { ignoreBuildErrors: true }, eslint: { ignoreDuringBuilds: true } }" > next.config.js
+          npm run build
+          mv next.config.js.bak next.config.js
 
       - name: Install Capacitor Android
         run: npm install @capacitor/android
@@ -38,6 +44,11 @@ jobs:
       - name: Install Capacitor CLI globally
         run: npm install -g @capacitor/cli
 
+      - name: Copy web build to Android assets
+        run: |
+          rm -rf android/app/src/main/assets/public
+          mkdir -p android/app/src/main/assets/public
+          cp -r out/* android/app/src/main/assets/public/
       - name: Ensure Capacitor Android platform exists
         run: |
           if [ ! -d "android" ]; then
