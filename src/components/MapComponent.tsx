@@ -1,6 +1,4 @@
-
-'use client';
-
+"use client";
 import { Geolocation } from '@capacitor/geolocation';
 
 // Extend Window type to include Capacitor (for TypeScript)
@@ -45,10 +43,33 @@ interface MapComponentProps {
 
 export default function MapComponent({ className = '' }: MapComponentProps) {
   const mapRef = useRef<any>(null)
+  // ...alla useState och useRef deklarationer...
+
+  // Ref to track if user is manually panning the map (prevents auto-centering during navigation)
+  const isUserPanning = useRef(false)
+
+  // ...alla useState och useRef deklarationer...
+
   const mapContainerRef = useRef<HTMLDivElement>(null)
   const markersLayerRef = useRef<any>(null)
   const [isMapLoaded, setIsMapLoaded] = useState(false)
   const [L, setL] = useState<any>(null)
+
+  // Attach event listener to map to detect manual panning
+  useEffect(() => {
+    if (!mapRef.current) return;
+    const map = mapRef.current;
+    const handleMoveStart = () => {
+      isUserPanning.current = true;
+    };
+    map.on && map.on('movestart', handleMoveStart);
+    return () => {
+      map.off && map.off('movestart', handleMoveStart);
+    };
+  }, [isMapLoaded]);
+
+  // Reset isUserPanning when navigation target changes (so auto-centering works at navigation start)
+  // Placera denna hook EFTER att navigationTarget deklarerats
   
   // Initialize categories with defaults + any custom ones from localStorage
   const [categories, setCategories] = useState(() => {
@@ -74,6 +95,7 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
   const [showMenu, setShowMenu] = useState(false)
   const [userLocation, setUserLocation] = useState<{lat: number, lng: number} | null>(null)
   const [userHeading, setUserHeading] = useState<number | null>(null)
+  const [userSpeed, setUserSpeed] = useState<number | null>(null)
   const [carLocation, setCarLocation] = useState<{lat: number, lng: number} | null>(null)
   const [carMarkerRef, setCarMarkerRef] = useState<any>(null)
   const [showCarDirection, setShowCarDirection] = useState(false)
@@ -88,9 +110,31 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
   const [selectedCategory, setSelectedCategory] = useState<string>('all')
   const [showNavigationDialog, setShowNavigationDialog] = useState(false)
   const [navigationTarget, setNavigationTarget] = useState<MushroomMarker | null>(null)
+
+  // Reset isUserPanning when navigation target changes (so auto-centering works at navigation start)
+  useEffect(() => {
+    isUserPanning.current = false;
+  }, [navigationTarget]);
   const [showWalkingDirection, setShowWalkingDirection] = useState(false)
   const [walkingDirectionLine, setWalkingDirectionLine] = useState<any>(null)
   const [showMapsConfirmation, setShowMapsConfirmation] = useState(false)
+  // Attach event listener to map to detect manual panning
+  useEffect(() => {
+    if (!mapRef.current) return;
+    const map = mapRef.current;
+    const handleMoveStart = () => {
+      isUserPanning.current = true;
+    };
+    map.on && map.on('movestart', handleMoveStart);
+    return () => {
+      map.off && map.off('movestart', handleMoveStart);
+    };
+  }, [isMapLoaded]);
+
+  // Reset isUserPanning when navigation target changes (so auto-centering works at navigation start)
+  useEffect(() => {
+    isUserPanning.current = false;
+  }, [navigationTarget]);
   const [currentMapType, setCurrentMapType] = useState<'mml-topo' | 'mml-satellite' | 'opentopo' | 'lantmateriet' | 'lantmateriet-satellite'>(() => {
     // Load saved map type from localStorage, default to 'opentopo' if not found
     // Only access localStorage in the browser (not during SSR)
@@ -119,6 +163,23 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
   const [newCategoryForm, setNewCategoryForm] = useState({ name: '', emoji: '🍄' })
   const [editingCategory, setEditingCategory] = useState<any>(null)
   const [isEditMode, setIsEditMode] = useState(false)
+
+  // Ref to track if user is manually panning the map (prevents auto-centering during navigation)
+
+  // Attach event listener to map to detect manual panning
+  useEffect(() => {
+    if (!mapRef.current) return;
+    const map = mapRef.current;
+    const handleMoveStart = () => {
+    };
+    map.on && map.on('movestart', handleMoveStart);
+    return () => {
+      map.off && map.off('movestart', handleMoveStart);
+    };
+  }, [isMapLoaded]);
+
+  useEffect(() => {
+  }, [navigationTarget]);
 
   // Welcome popup state (only show once)
   const [showWelcome, setShowWelcome] = useState(false)
@@ -162,6 +223,7 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
 
   // Load saved car location from localStorage on component mount
   useEffect(() => {
+    // Initial load from localStorage (only once)
     try {
       const savedCarLocation = localStorage.getItem('svampkartan-car-location')
       if (savedCarLocation) {
@@ -172,6 +234,19 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
     } catch (error) {
       console.log('Could not load saved car location:', error)
     }
+  }, [])
+
+  // SAFEGUARD: Om carLocation blir null men localStorage har bil, återställ automatiskt
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const saved = localStorage.getItem('svampkartan-car-location')
+      if (!carLocation && saved) {
+        try {
+          setCarLocation(JSON.parse(saved))
+        } catch {}
+      }
+    }, 2000)
+    return () => clearInterval(interval)
   }, [])
 
   // Create car marker when car location is loaded and map is ready
@@ -201,6 +276,7 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
             console.log('Got precise location (web):', latitude, longitude, 'accuracy:', accuracy);
             setUserLocation({ lat: latitude, lng: longitude });
             setLocationStatus('found');
+            setUserSpeed(position.coords.speed ?? null);
             updateUserMarker(latitude, longitude);
             if (mapRef.current) {
               mapRef.current.setView([latitude, longitude], 15, {
@@ -246,6 +322,7 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
             const { latitude, longitude, accuracy } = position.coords;
             console.log('Location update (web):', latitude, longitude, 'accuracy:', accuracy);
             setUserLocation({ lat: latitude, lng: longitude });
+            setUserSpeed(position.coords.speed ?? null);
             updateUserMarker(latitude, longitude);
           },
           (error) => {
@@ -260,6 +337,7 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
             const { latitude, longitude, accuracy } = position.coords;
             console.log('Location update (native):', latitude, longitude, 'accuracy:', accuracy);
             setUserLocation({ lat: latitude, lng: longitude });
+            setUserSpeed(position.coords.speed ?? null);
             updateUserMarker(latitude, longitude);
           }
           if (error) {
@@ -351,7 +429,9 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
     const whiteBorder = 2;
     const blackBorder = 2;
     const arrowSize = Math.round(dotSize * 1.2);
-    const arrowHtml = (userHeading !== null ? `<svg width="${arrowSize}" height="${arrowSize}" style="position:absolute;left:50%;top:50%;transform:translate(-50%,-120%) rotate(${userHeading}deg);z-index:2;pointer-events:none;" viewBox="0 0 24 24"><polygon points="12,2 16,14 12,11 8,14" fill="#2563eb" stroke="white" stroke-width="1.5"/></svg>` : '');
+  // Visa pil alltid om heading finns
+  const showArrow = userHeading !== null;
+  const arrowHtml = (showArrow ? `<svg width="${arrowSize}" height="${arrowSize}" style="position:absolute;left:50%;top:50%;transform:translate(-50%,-120%) rotate(${userHeading}deg);z-index:2;pointer-events:none;" viewBox="0 0 24 24"><polygon points="12,2 16,14 12,11 8,14" fill="#2563eb" stroke="white" stroke-width="1.5"/></svg>` : '');
     const userHtml = `
       <div style="position:relative;width:${dotSize + 2 * (whiteBorder + blackBorder)}px;height:${dotSize + 2 * (whiteBorder + blackBorder)}px;display:flex;align-items:center;justify-content:center;">
         <div style="background:#000;border-radius:50%;width:${dotSize + 2 * (whiteBorder + blackBorder)}px;height:${dotSize + 2 * (whiteBorder + blackBorder)}px;position:absolute;left:0;top:0;"></div>
@@ -666,16 +746,25 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
       }
     }, 0);
 
-    setCarDirectionLine(line)
-
     // Calculate and store distance
     const distance = mapRef.current.distance(
       [userLocation.lat, userLocation.lng], 
       [carLocation.lat, carLocation.lng]
     ) / 1000 // Convert to kilometers
-    
     setCurrentCarDistance(distance)
     console.log(`Distance to car: ${Math.round(distance * 1000)}m`)
+
+    // Add a tooltip to the line with the distance
+    if (typeof formatDistance === 'function') {
+      line.bindTooltip(`${formatDistance(distance)}`, {
+        permanent: true,
+        direction: 'center',
+        className: 'car-distance-tooltip',
+        offset: [0, -10],
+        opacity: 0.95
+      }).openTooltip();
+    }
+    setCarDirectionLine(line)
   }
 
   // Expose findCar function globally for popup access
@@ -730,6 +819,25 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
       }
     }, 0);
 
+    // Calculate and update current distance
+    const distance = calculateDistance(
+      userLocation.lat, 
+      userLocation.lng, 
+      navigationTarget.lat, 
+      navigationTarget.lng
+    )
+    setCurrentNavigationDistance(distance)
+
+    // Add a tooltip to the line with the distance
+    if (typeof formatDistance === 'function') {
+      line.bindTooltip(`${formatDistance(distance)}`, {
+        permanent: true,
+        direction: 'center',
+        className: 'walk-distance-tooltip',
+        offset: [0, -10],
+        opacity: 0.95
+      }).openTooltip();
+    }
     setWalkingDirectionLine(line)
 
     // Only zoom on initial setup, not on location updates
@@ -741,22 +849,16 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
       ])
       
       // Fit bounds with larger padding for better context
-      mapRef.current.fitBounds(bounds, {
-        padding: [135, 135],
-        animate: true,
-        duration: 1,
-        maxZoom: 16
-      })
+      if (!isUserPanning.current) {
+        mapRef.current.fitBounds(bounds, {
+          padding: [30, 30],
+          animate: true,
+          duration: 1,
+          maxZoom: 16
+        })
+      }
     }
 
-    // Calculate and update current distance
-    const distance = calculateDistance(
-      userLocation.lat, 
-      userLocation.lng, 
-      navigationTarget.lat, 
-      navigationTarget.lng
-    )
-    setCurrentNavigationDistance(distance)
   }
 
   const hideWalkingDirection = () => {
@@ -815,6 +917,7 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
   }, [userLocation, showWalkingDirection, navigationTarget])
 
   const removeCar = () => {
+    // Denna funktion får ENDAST anropas från "ta bort bil"-flödet!
     if (carMarkerRef && mapRef.current) {
       mapRef.current.removeLayer(carMarkerRef)
     }
@@ -1846,7 +1949,7 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
 
         {/* Dropdown Menu */}
         {showMenu && (
-          <div className="absolute top-full right-2 sm:right-4 mt-1 bg-white/95 backdrop-blur-md rounded-lg sm:rounded-xl shadow-2xl border border-white/20 min-w-40 sm:min-w-48 py-1 sm:py-2" style={{ zIndex: 50000 }}>
+          <div className="absolute top-full right-2 sm:right-4 mt-1 bg-white/95 backdrop-blur-md rounded-lg sm:rounded-xl shadow-2xl border border-white/20 min-w-40 sm:min-w-48 py-1 sm:py-2 max-h-[80vh] overflow-y-auto" style={{ zIndex: 50000 }}>
             <div className="px-3 sm:px-4 py-1.5 sm:py-2 text-gray-600 text-xs sm:text-sm border-b border-gray-200/50">
               <div className="font-medium">Meny</div>
             </div>
@@ -1901,6 +2004,21 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
                 <span className="font-medium text-sm sm:text-base">Hantera kategorier</span>
               </button>
             </div>
+            <div>
+              {/* Kartval sektion */}
+              <div className="py-0.5 sm:py-1 border-t border-gray-200/50 mt-1">
+                <div className="px-3 sm:px-4 py-1.5 sm:py-2 text-gray-600 text-xs sm:text-sm font-medium">Karttyp</div>
+                <div className="flex flex-col gap-1 px-3 sm:px-4 pb-2">
+                  <button onClick={() => { changeMapType('opentopo'); setShowMenu(false); }} className={`py-1.5 rounded text-left text-sm ${currentMapType === 'opentopo' ? 'bg-green-100 text-green-800 font-semibold' : 'hover:bg-gray-100 text-gray-700'}`}>OpenTopo</button>
+                  <button onClick={() => { changeMapType('mml-topo'); setShowMenu(false); }} className={`py-1.5 rounded text-left text-sm ${currentMapType === 'mml-topo' ? 'bg-green-100 text-green-800 font-semibold' : 'hover:bg-gray-100 text-gray-700'}`}>MML Topo (FIN)</button>
+                  <button onClick={() => { changeMapType('mml-satellite'); setShowMenu(false); }} className={`py-1.5 rounded text-left text-sm ${currentMapType === 'mml-satellite' ? 'bg-green-100 text-green-800 font-semibold' : 'hover:bg-gray-100 text-gray-700'}`}>MML Satellite (FIN)</button>
+                  <button onClick={() => { changeMapType('lantmateriet'); setShowMenu(false); }} className={`py-1.5 rounded text-left text-sm ${currentMapType === 'lantmateriet' ? 'bg-green-100 text-green-800 font-semibold' : 'hover:bg-gray-100 text-gray-700'}`}>Lantmäteriet Topo (SWE)</button>
+                  <button onClick={() => { changeMapType('lantmateriet-satellite'); setShowMenu(false); }} className={`py-1.5 rounded text-left text-sm ${currentMapType === 'lantmateriet-satellite' ? 'bg-green-100 text-green-800 font-semibold' : 'hover:bg-gray-100 text-gray-700'}`}>Lantmäteriet Satellite (SWE)</button>
+                </div>
+              </div>
+            </div>
+            {/* Spacer för att sista menyvalet alltid ska gå att skrolla fram */}
+            <div style={{ height: 30, pointerEvents: 'none' }} />
           </div>
         )}
       </div>
@@ -1970,7 +2088,7 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
   </div>
 
       {/* Floating Car Controls - Bottom */}
-  <div className="fixed top-52 right-2" style={{ zIndex: 10000 }}>
+  <div className="fixed top-28 right-2" style={{ zIndex: 10000 }}>
   {/* Main Car Button */}
     <button
       onClick={toggleCarControls}
@@ -2217,7 +2335,7 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
             <div className="text-center mb-6">
               <div className="text-4xl mb-2">🧭</div>
               <h3 className="text-xl font-semibold text-gray-800 mb-2">Navigera till</h3>
-              <p className="text-lg text-gray-600">{navigationTarget.name}</p>
+              <p className="text-lg text-gray-600">{navigationTarget.name}</p>              ngrok http 3444 --log=stdout              ngrok http 3444 --log=stdout
               {userLocation && (
                 <p className="text-sm text-gray-500 mt-1">
                   {formatDistance(calculateDistance(userLocation.lat, userLocation.lng, navigationTarget.lat, navigationTarget.lng))} bort
@@ -2255,12 +2373,18 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
                     ])
                     
                     // Fit bounds with larger padding for better context
-                    mapRef.current.fitBounds(bounds, {
-                      padding: [135, 135],
-                      animate: true,
-                      duration: 1,
-                      maxZoom: 15
-                    })
+                    if (!isUserPanning.current) {
+                      mapRef.current.fitBounds(bounds, {
+                        padding: [30, 30],
+                        animate: true,
+                        duration: 1,
+                        maxZoom: 15
+                      })
+                    }
+  // Återställ flagga när navigation startar/avslutas
+  useEffect(() => {
+    isUserPanning.current = false;
+  }, [navigationTarget]);
                   }
                   
                   // Draw line after a short delay to ensure state is updated
@@ -2324,7 +2448,7 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
       )}
 
       {/* Floating Location Button */}
-  <div className="fixed top-20 right-2" style={{ zIndex: 10000 }}>
+  <div className="fixed top-14 right-2" style={{ zIndex: 10000 }}>
   <button
       onClick={zoomToUserLocation}
   className="w-12 h-12 rounded-full shadow-lg transition-all duration-300 border-2 bg-black/60 border-white active:scale-95 flex items-center justify-center"
@@ -2334,11 +2458,21 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
     </button>
   </div>
 
-      {/* Walking Navigation Cancel Button - centered at bottom when walking direction is active */}
-      {showWalkingDirection && navigationTarget && (
+      {/* Navigation Cancel Button - centered at bottom for both walking and car navigation */}
+      {(showWalkingDirection || showCarDirection) && (
         <div className="fixed bottom-4 left-1/2 transform -translate-x-1/2" style={{ zIndex: 10000 }}>
           <button 
-            onClick={hideWalkingDirection}
+            onClick={() => {
+              if (showWalkingDirection) hideWalkingDirection();
+              if (showCarDirection) {
+                setShowCarDirection(false);
+                setCurrentCarDistance(null);
+                if (carDirectionLine && mapRef.current) {
+                  mapRef.current.removeLayer(carDirectionLine);
+                  setCarDirectionLine(null);
+                }
+              }
+            }}
             className="px-6 py-3 rounded-full shadow-lg transition-all duration-300 border-2 bg-red-500 border-red-300 text-white text-sm font-medium hover:bg-red-600 active:scale-95"
           >
             Avbryt navigering
@@ -2346,118 +2480,13 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
         </div>
       )}
 
-      {/* Car Navigation Distance Display */}
-      {showCarDirection && carLocation && currentCarDistance !== null && (
-        <div className="fixed top-20 left-1/2 transform -translate-x-1/2" style={{ zIndex: 10000 }}>
-          <div className="bg-white/95 backdrop-blur-md rounded-2xl px-6 py-3 shadow-lg border border-red-200">
-            <div className="flex items-center gap-3">
-              <span className="text-lg">🚗</span>
-              <div className="text-center">
-                <div className="text-sm text-gray-600 font-medium">Navigerar till bil</div>
-                <div className="text-xl font-bold text-red-800">{formatDistance(currentCarDistance)}</div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
-      {/* Walking Navigation Distance Display */}
-      {showWalkingDirection && navigationTarget && currentNavigationDistance !== null && (
-        <div className="fixed top-20 left-1/2 transform -translate-x-1/2" style={{ zIndex: 10000 }}>
-          <div className="bg-white/95 backdrop-blur-md rounded-2xl px-4 py-2 shadow-lg border border-green-200">
-            <div className="flex items-center gap-2">
-              <span className="text-base">🚶</span>
-              <div className="text-center">
-                <div className="text-xs text-gray-600 font-medium">Navigerar till</div>
-                <div className="text-sm font-bold text-green-700">{navigationTarget.name}</div>
-                <div className="text-base font-bold text-green-800">{formatDistance(currentNavigationDistance)}</div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
-      {/* Map Type Selector - Bottom */}
-  <div className="fixed top-36 right-2" style={{ zIndex: 10000 }}>
-        {/* Main Map Button */}
-        <button
-          onClick={() => setShowMapSelector(!showMapSelector)}
-          className="relative w-12 h-12 rounded-full shadow-lg transition-all duration-300 border-2 bg-black/60 border-white active:scale-95 flex items-center justify-center"
-          title="Ändra karttyp"
-        >
-          <span className="text-xl leading-none">🌍</span>
-        </button>
 
-        {/* Map Type Selection Panel - only show when controls are open */}
-        {showMapSelector && (
-          <div className="absolute top-1/2 transform -translate-y-1/2 right-16 flex flex-col gap-2 bg-white/10 backdrop-blur-md rounded-2xl p-3 border border-white/20">
-            <button 
-              onClick={() => {
-                changeMapType('opentopo')
-                setShowMapSelector(false)
-              }}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 whitespace-nowrap ${
-                currentMapType === 'opentopo' 
-                  ? 'bg-green-100 text-green-800 border border-green-300' 
-                  : 'bg-white/80 text-gray-700 border border-gray-300 hover:bg-white/90'
-              }`}
-            >
-              OpenTopo
-            </button>
-            <button 
-              onClick={() => {
-                changeMapType('mml-topo')
-                setShowMapSelector(false)
-              }}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 whitespace-nowrap ${
-                currentMapType === 'mml-topo' 
-                  ? 'bg-green-100 text-green-800 border border-green-300' 
-                  : 'bg-white/80 text-gray-700 border border-gray-300 hover:bg-white/90'
-              }`}
-            >
-              MML Topo (FIN)
-            </button>
-            <button 
-              onClick={() => {
-                changeMapType('mml-satellite')
-                setShowMapSelector(false)
-              }}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 whitespace-nowrap ${
-                currentMapType === 'mml-satellite' 
-                  ? 'bg-green-100 text-green-800 border border-green-300' 
-                  : 'bg-white/80 text-gray-700 border border-gray-300 hover:bg-white/90'
-              }`}
-            >
-              MML Satellite (FIN)
-            </button>
-            <button 
-              onClick={() => {
-                changeMapType('lantmateriet')
-                setShowMapSelector(false)
-              }}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 whitespace-nowrap ${
-                currentMapType === 'lantmateriet' 
-                  ? 'bg-green-100 text-green-800 border border-green-300' 
-                  : 'bg-white/80 text-gray-700 border border-gray-300 hover:bg-white/90'
-              }`}
-            >
-              Lantmäteriet Topo (SWE)
-            </button>
-            <button 
-              onClick={() => {
-                changeMapType('lantmateriet-satellite')
-                setShowMapSelector(false)
-              }}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 whitespace-nowrap ${
-                currentMapType === 'lantmateriet-satellite' 
-                  ? 'bg-green-100 text-green-800 border border-green-300' 
-                  : 'bg-white/80 text-gray-700 border border-gray-300 hover:bg-white/90'
-              }`}
-            >
-              Lantmäteriet Satellite (SWE)            </button>
-          </div>
-        )}
-      </div>
+
+
+      {/* Kartval i menyn */}
+      {/* Lägg till i dropdown-menyn under "Meny" */}
 
       {/* Map Container - adjusted for header */}
       <div 
