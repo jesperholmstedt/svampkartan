@@ -12,8 +12,7 @@ const nextConfig = {
   images: {
     unoptimized: true
   },
-  basePath: `/${repoName}`,
-  assetPrefix: `/${repoName}/`,
+  // basePath and assetPrefix removed for local static export
 }
 
 module.exports = nextConfig

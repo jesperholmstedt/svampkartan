@@ -1,6 +1,20 @@
 
 'use client';
+
 import { Geolocation } from '@capacitor/geolocation';
+
+// Extend Window type to include Capacitor (for TypeScript)
+declare global {
+  interface Window {
+    Capacitor?: {
+      isNativePlatform?: () => boolean;
+      [key: string]: any;
+    };
+  }
+}
+
+// Utility to check if running in a web browser or native
+const isNative = typeof window !== 'undefined' && (window.Capacitor?.isNativePlatform?.() === true);
 
 import { useState, useEffect, useRef } from 'react'
 import 'leaflet/dist/leaflet.css'
@@ -59,6 +73,7 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
   const [pendingMarker, setPendingMarker] = useState<{lat: number, lng: number} | null>(null)
   const [showMenu, setShowMenu] = useState(false)
   const [userLocation, setUserLocation] = useState<{lat: number, lng: number} | null>(null)
+  const [userHeading, setUserHeading] = useState<number | null>(null)
   const [carLocation, setCarLocation] = useState<{lat: number, lng: number} | null>(null)
   const [carMarkerRef, setCarMarkerRef] = useState<any>(null)
   const [showCarDirection, setShowCarDirection] = useState(false)
@@ -67,7 +82,8 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
   const [showCarControls, setShowCarControls] = useState(false)
   const [showParkingDialog, setShowParkingDialog] = useState(false)
   const [locationStatus, setLocationStatus] = useState<string>('')
-  const [watchId, setWatchId] = useState<number | null>(null)
+  // watchId can be number (web) or string (native)
+  const [watchId, setWatchId] = useState<number | string | null>(null)
   const [showFindsList, setShowFindsList] = useState(false)
   const [selectedCategory, setSelectedCategory] = useState<string>('all')
   const [showNavigationDialog, setShowNavigationDialog] = useState(false)
@@ -176,22 +192,46 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
 
   // Comprehensive location management
   const requestLocation = async () => {
-    setLocationStatus('locating')
+    setLocationStatus('locating');
     try {
-      await Geolocation.requestPermissions();
-      const position = await Geolocation.getCurrentPosition({ enableHighAccuracy: true });
-      const { latitude, longitude, accuracy } = position.coords;
-      console.log('Got precise location:', latitude, longitude, 'accuracy:', accuracy);
-      setUserLocation({ lat: latitude, lng: longitude });
-      setLocationStatus('found');
-      updateUserMarker(latitude, longitude);
-      if (mapRef.current) {
-        mapRef.current.setView([latitude, longitude], 15, {
-          animate: true,
-          duration: 1
-        });
+      if (!isNative && typeof navigator !== 'undefined' && 'geolocation' in navigator) {
+        navigator.geolocation.getCurrentPosition(
+          (position) => {
+            const { latitude, longitude, accuracy } = position.coords;
+            console.log('Got precise location (web):', latitude, longitude, 'accuracy:', accuracy);
+            setUserLocation({ lat: latitude, lng: longitude });
+            setLocationStatus('found');
+            updateUserMarker(latitude, longitude);
+            if (mapRef.current) {
+              mapRef.current.setView([latitude, longitude], 15, {
+                animate: true,
+                duration: 1
+              });
+            }
+            startLocationWatch();
+          },
+          (error) => {
+            console.log('Geolocation error (web):', error.message);
+            handleLocationError(error);
+          },
+          { enableHighAccuracy: true }
+        );
+      } else {
+        await Geolocation.requestPermissions();
+        const position = await Geolocation.getCurrentPosition({ enableHighAccuracy: true });
+        const { latitude, longitude, accuracy } = position.coords;
+        console.log('Got precise location (native):', latitude, longitude, 'accuracy:', accuracy);
+        setUserLocation({ lat: latitude, lng: longitude });
+        setLocationStatus('found');
+        updateUserMarker(latitude, longitude);
+        if (mapRef.current) {
+          mapRef.current.setView([latitude, longitude], 15, {
+            animate: true,
+            duration: 1
+          });
+        }
+        startLocationWatch();
       }
-      startLocationWatch();
     } catch (error: any) {
       console.log('Geolocation error:', error.message);
       handleLocationError(error);
@@ -200,24 +240,43 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
 
   const startLocationWatch = () => {
     if (!watchId) {
-      const id = Geolocation.watchPosition({ enableHighAccuracy: true }, (position, error) => {
-        if (position) {
-          const { latitude, longitude, accuracy } = position.coords;
-          console.log('Location update:', latitude, longitude, 'accuracy:', accuracy);
-          setUserLocation({ lat: latitude, lng: longitude });
-          updateUserMarker(latitude, longitude);
-        }
-        if (error) {
-          console.log('watchPosition error:', error);
-        }
-      });
-      setWatchId(id);
+      if (!isNative && typeof navigator !== 'undefined' && 'geolocation' in navigator) {
+        const id = navigator.geolocation.watchPosition(
+          (position) => {
+            const { latitude, longitude, accuracy } = position.coords;
+            console.log('Location update (web):', latitude, longitude, 'accuracy:', accuracy);
+            setUserLocation({ lat: latitude, lng: longitude });
+            updateUserMarker(latitude, longitude);
+          },
+          (error) => {
+            console.log('watchPosition error (web):', error);
+          },
+          { enableHighAccuracy: true }
+        );
+        setWatchId(id);
+      } else {
+        Geolocation.watchPosition({ enableHighAccuracy: true }, (position, error) => {
+          if (position) {
+            const { latitude, longitude, accuracy } = position.coords;
+            console.log('Location update (native):', latitude, longitude, 'accuracy:', accuracy);
+            setUserLocation({ lat: latitude, lng: longitude });
+            updateUserMarker(latitude, longitude);
+          }
+          if (error) {
+            console.log('watchPosition error (native):', error);
+          }
+        }).then((id: string) => setWatchId(id));
+      }
     }
   }
 
   const stopLocationWatch = () => {
-    if (watchId) {
-      Geolocation.clearWatch({ id: watchId });
+    if (watchId !== null) {
+      if (!isNative && typeof navigator !== 'undefined' && 'geolocation' in navigator && typeof watchId === 'number') {
+        navigator.geolocation.clearWatch(watchId);
+      } else if (typeof watchId === 'string') {
+        Geolocation.clearWatch({ id: watchId });
+      }
       setWatchId(null);
     }
   }
@@ -251,26 +310,66 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
     }, 1000)
   }
 
+  // Helper to calculate heading in degrees from two lat/lng points
+  function calculateHeading(lat1: number, lng1: number, lat2: number, lng2: number): number {
+    const dLon = (lng2 - lng1) * Math.PI / 180;
+    const y = Math.sin(dLon) * Math.cos(lat2 * Math.PI / 180);
+    const x = Math.cos(lat1 * Math.PI / 180) * Math.sin(lat2 * Math.PI / 180) -
+              Math.sin(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.cos(dLon);
+    let brng = Math.atan2(y, x) * 180 / Math.PI;
+    return (brng + 360) % 360;
+  }
+
+  // Store previous user location for heading calculation
+  const prevUserLocation = useRef<{lat: number, lng: number} | null>(null);
+
   const updateUserMarker = (lat: number, lng: number) => {
-    if (!mapRef.current || !L) return
-    
+    if (!mapRef.current || !L) return;
+
     // Remove existing user marker
     mapRef.current.eachLayer((layer: any) => {
       if (layer.options && layer.options.icon && layer.options.icon.options.className === 'user-location-marker') {
-        mapRef.current.removeLayer(layer)
+        mapRef.current.removeLayer(layer);
       }
-    })
-    
-    // Add new user marker
-    const userIcon = L.divIcon({
-      html: '<div style="background: #10b981; border: 3px solid white; border-radius: 50%; width: 20px; height: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.3); animation: pulse 2s infinite;"></div>',
+    });
+
+    // Calculate heading if previous location exists and movement is significant
+    let heading: number | null = null;
+    if (prevUserLocation.current) {
+      const dist = calculateDistance(prevUserLocation.current.lat, prevUserLocation.current.lng, lat, lng);
+      if (dist > 0.0001) { // ~10m
+        heading = calculateHeading(prevUserLocation.current.lat, prevUserLocation.current.lng, lat, lng);
+        setUserHeading(heading);
+      }
+    }
+    prevUserLocation.current = { lat, lng };
+
+    // User marker: small blue dot with white border, and arrow if heading, size scales with zoom
+    const { dotSize: baseDotSize } = getZoomBasedSizes(mapZoom);
+    // Clamp dot size to a more visible range (min 10, max 18)
+    const dotSize = Math.max(10, Math.min(18, baseDotSize || 12));
+    const whiteBorder = 2;
+    const blackBorder = 2;
+    const arrowSize = Math.round(dotSize * 1.2);
+    const arrowHtml = (userHeading !== null ? `<svg width="${arrowSize}" height="${arrowSize}" style="position:absolute;left:50%;top:50%;transform:translate(-50%,-120%) rotate(${userHeading}deg);z-index:2;pointer-events:none;" viewBox="0 0 24 24"><polygon points="12,2 16,14 12,11 8,14" fill="#2563eb" stroke="white" stroke-width="1.5"/></svg>` : '');
+    const userHtml = `
+      <div style="position:relative;width:${dotSize + 2 * (whiteBorder + blackBorder)}px;height:${dotSize + 2 * (whiteBorder + blackBorder)}px;display:flex;align-items:center;justify-content:center;">
+        <div style="background:#000;border-radius:50%;width:${dotSize + 2 * (whiteBorder + blackBorder)}px;height:${dotSize + 2 * (whiteBorder + blackBorder)}px;position:absolute;left:0;top:0;"></div>
+        <div style="background:#fff;border-radius:50%;width:${dotSize + 2 * whiteBorder}px;height:${dotSize + 2 * whiteBorder}px;position:absolute;left:${blackBorder}px;top:${blackBorder}px;"></div>
+        <div style="background:#2563eb;border-radius:50%;width:${dotSize}px;height:${dotSize}px;position:absolute;left:${blackBorder + whiteBorder}px;top:${blackBorder + whiteBorder}px;box-shadow:0 1px 4px rgba(0,0,0,0.18);"></div>
+        ${arrowHtml}
+      </div>
+    `;
+    // Adjust icon size and anchor for new borders
+    const totalSize = dotSize + 2 * (whiteBorder + blackBorder);
+    const userLocationIcon = L.divIcon({
+      html: userHtml,
       className: 'user-location-marker',
-      iconSize: [20, 20],
-      iconAnchor: [10, 10]
-    })
-    
-    L.marker([lat, lng], { icon: userIcon })
-      .addTo(mapRef.current)
+      iconSize: [totalSize, totalSize],
+      iconAnchor: [totalSize/2, totalSize/2]
+    });
+
+    L.marker([lat, lng], { icon: userLocationIcon }).addTo(mapRef.current);
   }
 
   // Distance calculation function using Haversine formula
@@ -454,7 +553,22 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
     
     const marker = L.marker([lat, lng], { icon: carIcon })
       .addTo(mapRef.current)
-    
+    marker.on('click', () => {
+      // Always zoom to show both user and car when clicking the marker
+      if (userLocation && mapRef.current) {
+        const bounds = L.latLngBounds([
+          [userLocation.lat, userLocation.lng],
+          [lat, lng]
+        ]);
+        mapRef.current.fitBounds(bounds, {
+          padding: [50, 50],
+          animate: true,
+          duration: 1,
+          maxZoom: 16
+        });
+      }
+      findCar();
+    });
     setCarMarkerRef(marker)
   }
 
@@ -518,16 +632,39 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
       mapRef.current.removeLayer(carDirectionLine)
     }
 
-    // Create line between user and car
-    const line = L.polyline(
-      [[userLocation.lat, userLocation.lng], [carLocation.lat, carLocation.lng]], 
-      {
-        color: '#ef4444',
-        weight: 5,
-        opacity: 0.9,
-        dashArray: '12, 6'
+    // Create modern gradient line between user and car
+    const path = [[userLocation.lat, userLocation.lng], [carLocation.lat, carLocation.lng]];
+    const line = L.polyline(path, {
+      color: '#ef4444', // fallback
+      weight: 7,
+      opacity: 1,
+      dashArray: '0',
+      lineCap: 'round',
+      lineJoin: 'round',
+      className: 'modern-nav-line-car'
+    }).addTo(mapRef.current);
+    // Add SVG gradient effect
+    setTimeout(() => {
+      const svg = mapRef.current.getPane('overlayPane').querySelector('svg');
+      if (svg && !svg.querySelector('#car-gradient')) {
+        const grad = document.createElementNS('http://www.w3.org/2000/svg', 'linearGradient');
+        grad.setAttribute('id', 'car-gradient');
+        grad.setAttribute('x1', '0%');
+        grad.setAttribute('y1', '0%');
+        grad.setAttribute('x2', '100%');
+        grad.setAttribute('y2', '0%');
+        grad.innerHTML = `
+          <stop offset="0%" stop-color="#f87171"/>
+          <stop offset="100%" stop-color="#991b1b"/>
+        `;
+        svg.insertBefore(grad, svg.firstChild);
       }
-    ).addTo(mapRef.current)
+      const pathEl = svg?.querySelector('.modern-nav-line-car');
+      if (pathEl) {
+        pathEl.setAttribute('stroke', 'url(#car-gradient)');
+        pathEl.setAttribute('filter', 'drop-shadow(0px 2px 6px rgba(239,68,68,0.18))');
+      }
+    }, 0);
 
     setCarDirectionLine(line)
 
@@ -559,16 +696,39 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
       mapRef.current.removeLayer(walkingDirectionLine)
     }
 
-    // Create line between user and target mushroom
-    const line = L.polyline(
-      [[userLocation.lat, userLocation.lng], [navigationTarget.lat, navigationTarget.lng]], 
-      {
-        color: '#22c55e',
-        weight: 5,
-        opacity: 0.9,
-        dashArray: '10, 4'
+    // Create modern gradient line between user and mushroom
+    const path = [[userLocation.lat, userLocation.lng], [navigationTarget.lat, navigationTarget.lng]];
+    const line = L.polyline(path, {
+      color: '#22c55e', // fallback
+      weight: 7,
+      opacity: 1,
+      dashArray: '0',
+      lineCap: 'round',
+      lineJoin: 'round',
+      className: 'modern-nav-line-walk'
+    }).addTo(mapRef.current);
+    // Add SVG gradient effect
+    setTimeout(() => {
+      const svg = mapRef.current.getPane('overlayPane').querySelector('svg');
+      if (svg && !svg.querySelector('#walk-gradient')) {
+        const grad = document.createElementNS('http://www.w3.org/2000/svg', 'linearGradient');
+        grad.setAttribute('id', 'walk-gradient');
+        grad.setAttribute('x1', '0%');
+        grad.setAttribute('y1', '0%');
+        grad.setAttribute('x2', '100%');
+        grad.setAttribute('y2', '0%');
+        grad.innerHTML = `
+          <stop offset="0%" stop-color="#6ee7b7"/>
+          <stop offset="100%" stop-color="#059669"/>
+        `;
+        svg.insertBefore(grad, svg.firstChild);
       }
-    ).addTo(mapRef.current)
+      const pathEl = svg?.querySelector('.modern-nav-line-walk');
+      if (pathEl) {
+        pathEl.setAttribute('stroke', 'url(#walk-gradient)');
+        pathEl.setAttribute('filter', 'drop-shadow(0px 2px 6px rgba(16,185,129,0.18))');
+      }
+    }, 0);
 
     setWalkingDirectionLine(line)
 
@@ -580,9 +740,9 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
         [navigationTarget.lat, navigationTarget.lng]
       ])
       
-      // Fit bounds with padding
+      // Fit bounds with larger padding for better context
       mapRef.current.fitBounds(bounds, {
-        padding: [50, 50],
+        padding: [135, 135],
         animate: true,
         duration: 1,
         maxZoom: 16
@@ -1100,103 +1260,78 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
       const sizes = getZoomBasedSizes(mapZoom)
       const categoryColors = getCategoryColors(marker.category || 'edible')
       
-      // Create modern sleek marker design with FIXED sizing for accurate positioning
+      // Modern SVG mushroom pin marker
+      const green = '#10b981';
       const mushroomIcon = L.divIcon({
         html: `
           <style>
-            .mushroom-marker {
-              transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            .mushroom-marker-modern {
+              display: flex;
+              flex-direction: column;
+              align-items: center;
+              cursor: pointer;
+              transition: transform 0.2s cubic-bezier(.4,0,.2,1);
             }
-            .mushroom-marker:hover {
-              transform: translateY(-50%) scale(1.05);
-              filter: drop-shadow(0 12px 24px rgba(0,0,0,0.25));
-            }
-            .mushroom-marker:hover .marker-content {
-              box-shadow: 
-                0 8px 32px rgba(0, 0, 0, 0.12),
-                0 2px 8px rgba(16, 185, 129, 0.15),
-                inset 0 1px 1px rgba(255, 255, 255, 0.95),
-                inset 0 -1px 1px rgba(16, 185, 129, 0.03);
+            .mushroom-marker-modern:hover {
+              transform: scale(1.08) translateY(-6px);
+              filter: drop-shadow(0 8px 24px rgba(0,0,0,0.18));
             }
           </style>
-          <div class="mushroom-marker" style="
-            display: flex; 
-            flex-direction: column; 
-            align-items: center; 
-            cursor: pointer;
-            filter: drop-shadow(0 8px 16px rgba(0,0,0,0.15));
-          ">
-            <!-- Modern Pin with integrated info -->
-            <div class="marker-content" style="
-              background: linear-gradient(135deg, 
-                rgba(255, 255, 255, 0.95) 0%, 
-                rgba(248, 250, 252, 0.9) 50%,
-                ${categoryColors.secondary} 100%);
-              border: 1px solid ${categoryColors.accent};
-              padding: 4px 14px;
-              position: relative;
-              backdrop-filter: blur(20px) saturate(180%);
-              box-shadow: 
-                0 4px 20px rgba(0, 0, 0, 0.08),
-                0 1px 4px ${categoryColors.accent},
-                inset 0 1px 1px rgba(255, 255, 255, 0.9),
-                inset 0 -1px 1px ${categoryColors.accent};
-              transform: perspective(100px) rotateX(2deg);
-              transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-            ">
-              
-              <!-- Name with modern typography -->
+            <div class="mushroom-marker-modern" style="height:44px;width:18px;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;">
               <div style="
-                font-size: 13px;
-                font-weight: 600;
-                color: #1e293b;
-                margin-bottom: 2px;
-                letter-spacing: -0.3px;
+                background: rgba(0,0,0,0.82);
+                border: none;
+                border-radius: 5px;
+                padding: 1.5px 10px 4px 10px;
+                font-size: 11px;
+                font-weight: 400;
+                color: #fff;
+                box-shadow: 0 4px 16px rgba(16,185,129,0.10), 0 1.5px 6px rgba(0,0,0,0.10);
+                font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
                 text-align: center;
-                text-shadow: 0 1px 2px rgba(255,255,255,0.8);
-                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-              ">${marker.name}</div>
-              
-              <!-- Modern abundance indicator -->
-              <div style="
+                letter-spacing: -0.2px;
+                text-shadow: none;
+                max-width: 120px;
+                overflow: visible;
+                white-space: nowrap;
+                text-overflow: ellipsis;
+                margin-bottom: 2px;
                 display: flex;
+                flex-direction: column;
+                align-items: center;
                 justify-content: center;
-                gap: 3px;
-                margin-bottom: 0px;
+                gap: 2px;
+                filter: drop-shadow(0 2px 6px rgba(16,185,129,0.08));
               ">
-                ${Array.from({length: 5}, (_, i) => `
-                  <div style="
-                    width: 5px;
-                    height: 5px;
-                    border-radius: 50%;
-                    background: ${i < (marker.abundance || 3) 
-                      ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)' 
-                      : 'linear-gradient(135deg, #e5e7eb 0%, #d1d5db 100%)'};
-                    box-shadow: ${i < (marker.abundance || 3) 
-                      ? '0 1px 3px rgba(16, 185, 129, 0.4), inset 0 1px 1px rgba(255,255,255,0.3)' 
-                      : '0 1px 2px rgba(0,0,0,0.1), inset 0 1px 1px rgba(255,255,255,0.8)'};
-                    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-                  "></div>
-                `).join('')}
+                <span style="display:inline-block;vertical-align:middle;">
+                  ${(categories.find(cat => cat.id === marker.category)?.emoji || '❓')} ${marker.name}
+                </span>
+                <span style="display:flex;flex-direction:row;align-items:center;gap:2px;margin-top:2px;">
+                  ${Array.from({length: 5}, (_, i) => `
+                    <span style="
+                      width: 6px;
+                      height: 6px;
+                      border-radius: 50%;
+                      background: ${i < (marker.abundance || 3) 
+                        ? green 
+                        : '#e5e7eb'};
+                      box-shadow: ${i < (marker.abundance || 3) 
+                        ? '0 1px 2px rgba(16, 185, 129, 0.3), inset 0 1px 1px rgba(255,255,255,0.2)' 
+                        : '0 1px 1px rgba(0,0,0,0.08), inset 0 1px 1px rgba(255,255,255,0.7)'};
+                      border: 1px solid #fff;
+                      display: inline-block;
+                    "></span>
+                  `).join('')}
+                </span>
               </div>
-            </div>
-            
-            <!-- Arrow-shaped pin point -->
-            <div style="
-              width: 0;
-              height: 0;
-              border-left: 6px solid transparent;
-              border-right: 6px solid transparent;
-              border-top: 12px solid #dc2626;
-              margin-top: 2px;
-              position: relative;
-              filter: drop-shadow(0 4px 8px rgba(220, 38, 38, 0.3));
-            ">
+            <svg width="18" height="12" viewBox="0 0 18 12" fill="none" xmlns="http://www.w3.org/2000/svg" style="margin-top: 0;">
+              <polygon points="9,12 0,0 18,0" fill="#dc2626" stroke="#991b1b" stroke-width="1.5"/>
+            </svg>
           </div>
         `,
-        className: 'mushroom-icon-with-label',
-        iconSize: [120, 50], // Completely fixed size
-        iconAnchor: [60, 48] // Completely fixed anchor pointing to arrow tip
+        className: 'mushroom-icon-modern',
+        iconSize: [18, 44],
+        iconAnchor: [9, 44]
       })
       
       const leafletMarker = L.marker([marker.lat, marker.lng], { icon: mushroomIcon })
@@ -1662,7 +1797,7 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
   return (
     <div className={`relative w-full h-full ${className}`}>
       {/* Modern Glass Header */}
-      <div className="fixed top-0 left-0 right-0 h-12 bg-gradient-to-r from-green-500/80 to-emerald-600/80 backdrop-blur-md border-b border-white/20 shadow-lg z-[10000]">
+      <div className="fixed top-0 left-0 right-0 h-12 bg-gradient-to-r from-green-500/80 to-emerald-600/80 backdrop-blur-md border-b border-white/20 shadow-lg z-[50000]">
         <div className="flex items-center justify-between h-full px-4">
           <h1 className="text-white font-semibold text-lg">Min Svamp- och bärkarta</h1>
           
@@ -1711,7 +1846,7 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
 
         {/* Dropdown Menu */}
         {showMenu && (
-          <div className="absolute top-full right-2 sm:right-4 mt-1 bg-white/95 backdrop-blur-md rounded-lg sm:rounded-xl shadow-2xl border border-white/20 min-w-40 sm:min-w-48 py-1 sm:py-2">
+          <div className="absolute top-full right-2 sm:right-4 mt-1 bg-white/95 backdrop-blur-md rounded-lg sm:rounded-xl shadow-2xl border border-white/20 min-w-40 sm:min-w-48 py-1 sm:py-2" style={{ zIndex: 50000 }}>
             <div className="px-3 sm:px-4 py-1.5 sm:py-2 text-gray-600 text-xs sm:text-sm border-b border-gray-200/50">
               <div className="font-medium">Meny</div>
             </div>
@@ -1781,108 +1916,89 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
               className="mt-2 px-6 py-2 rounded-xl bg-emerald-500 text-white font-semibold shadow hover:bg-emerald-600 transition"
               onClick={() => setShowWelcome(false)}
             >
-              Starta kartan
+              Jag är redo att börja!
             </button>
           </div>
         </div>
       )}
       {/* Floating Add Button - Enhanced Animations */}
-      <div className="fixed bottom-8 right-8" style={{ zIndex: 10000 }}>
-        <div className="relative">
-          {/* Pulse ring animation */}
-          <div className={`absolute inset-0 rounded-2xl transition-all duration-1000 ${
-            !isAddingMarker ? 'animate-ping bg-emerald-400 opacity-20' : ''
-          }`}></div>
-          
-          <button 
-            onClick={() => {
-              // Prevent add marker during walking navigation
-              if (showWalkingDirection) {
-                return
-              }
-              
-              if (isAddingMarker) {
-                setIsAddingMarker(false)
-                setPendingMarker(null)
-              } else {
-                setShowAddChoiceDialog(true)
-              }
-            }}
-            className={`relative w-14 h-14 rounded-2xl text-white text-xl font-light shadow-2xl transition-all duration-300 transform backdrop-blur-sm border border-opacity-20 hover:scale-110 active:scale-95 ${
-              isAddingMarker 
-                ? 'bg-gradient-to-br from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 rotate-45 border-red-300 animate-pulse' 
-                : showWalkingDirection
-                  ? 'bg-gradient-to-br from-gray-400 to-gray-500 border-gray-300 opacity-50 cursor-not-allowed'
-                  : 'bg-gradient-to-br from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 hover:shadow-3xl border-emerald-300 hover:animate-bounce'
-            }`}
-            style={{
-              boxShadow: isAddingMarker 
-                ? '0 20px 40px rgba(239, 68, 68, 0.3), 0 8px 16px rgba(239, 68, 68, 0.2)' 
-                : showWalkingDirection
-                  ? '0 10px 20px rgba(107, 114, 128, 0.3), 0 4px 8px rgba(107, 114, 128, 0.2)'
-                  : '0 20px 40px rgba(16, 185, 129, 0.3), 0 8px 16px rgba(16, 185, 129, 0.2)',
-              animation: !isAddingMarker && !showWalkingDirection ? 'float 3s ease-in-out infinite' : ''
-            }}
-            title={showWalkingDirection ? "Inte tillgängligt under navigation" : (isAddingMarker ? "Avbryt" : "Lägg till fynd")}
-          >
-            <span className={`block transition-transform duration-300 ${isAddingMarker ? 'rotate-45' : ''}`}>
-              +
-            </span>
-            
-            {/* Ripple effect background */}
-            <div className={`absolute inset-0 rounded-2xl bg-white bg-opacity-10 transition-all duration-300 ${
-              isAddingMarker ? 'scale-110 opacity-0' : 'scale-100 opacity-100'
-            }`}></div>
-          </button>
-        </div>
-      </div>
-
-      {/* Floating Car Controls */}
-      <div className="fixed bottom-28 right-8" style={{ zIndex: 10000 }}>
-        {/* Walking Navigation Cancel Button */}
-        {showWalkingDirection && (
-          <div className="mb-3">
-            <button 
-              onClick={hideWalkingDirection}
-              className="relative w-12 h-12 rounded-full shadow-lg transition-all duration-300 border-2 flex items-center justify-center bg-red-500 border-red-300 shadow-red-500/30 hover:shadow-red-500/50 active:scale-95 animate-pulse"
-              title="Avbryt navigation till fots"
-            >
-              <span className="text-lg leading-none">❌</span>
-            </button>
-          </div>
-        )}
-        
-        {/* Main Car Button */}
-        <button 
-          onClick={toggleCarControls}
-          className={`relative w-12 h-12 rounded-full shadow-lg transition-all duration-300 border-2 flex items-center justify-center ${
-            isParkingMode 
-              ? 'bg-red-500 border-red-300 animate-pulse shadow-red-500/30' 
-              : carLocation
-                ? showCarControls
-                  ? 'bg-emerald-500 border-emerald-300 shadow-emerald-500/30'
-                  : 'bg-blue-500 border-blue-300 shadow-blue-500/30 hover:shadow-blue-500/50'
-                : 'bg-red-500 border-red-300 shadow-red-500/30 hover:shadow-red-500/50'
-          } ${showWalkingDirection ? 'opacity-50 cursor-not-allowed' : ''} active:scale-95`}
-          title={
-            showWalkingDirection ? "Inte tillgängligt under navigation" :
-            isParkingMode ? "Avbryt parkering" :
-            carLocation ? (showCarControls ? "Stäng bilkontroller" : "Öppna bilkontroller") : 
-            "Parkera bil"
+  <div className="fixed bottom-4 right-8" style={{ zIndex: 10000 }}>
+  <div className="relative flex flex-col gap-6">
+      {/* Pulse ring animation */}
+      <div className={`absolute inset-0 rounded-full transition-all duration-1000 ${
+        !isAddingMarker ? 'animate-ping bg-emerald-400 opacity-20' : ''
+      }`}></div>
+      <button
+        onClick={() => {
+          // Prevent add marker during walking navigation
+          if (showWalkingDirection) {
+            return
           }
-        >
-          <span className="text-lg leading-none">
-            {isParkingMode ? '❌' : '🚗'}
-          </span>
-        </button>
+          if (isAddingMarker) {
+            setIsAddingMarker(false)
+            setPendingMarker(null)
+          } else {
+            setShowAddChoiceDialog(true)
+          }
+        }}
+        className={`relative w-12 h-12 rounded-full text-white text-lg font-light shadow-2xl transition-all duration-300 transform backdrop-blur-sm border border-opacity-20 hover:scale-110 active:scale-95 flex items-center justify-center ${
+          isAddingMarker
+            ? 'bg-gradient-to-br from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 rotate-45 border-red-300 animate-pulse'
+            : showWalkingDirection
+              ? 'bg-gradient-to-br from-gray-400 to-gray-500 border-gray-300 opacity-50 cursor-not-allowed'
+              : 'bg-gradient-to-br from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 hover:shadow-3xl border-emerald-300 hover:animate-bounce'
+        }`}
+        style={{
+          boxShadow: isAddingMarker
+            ? '0 20px 40px rgba(239, 68, 68, 0.3), 0 8px 16px rgba(239, 68, 68, 0.2)'
+            : showWalkingDirection
+              ? '0 10px 20px rgba(107, 114, 128, 0.3), 0 4px 8px rgba(107, 114, 128, 0.2)'
+              : '0 20px 40px rgba(16, 185, 129, 0.3), 0 8px 16px rgba(16, 185, 129, 0.2)',
+          animation: !isAddingMarker && !showWalkingDirection ? 'float 3s ease-in-out infinite' : ''
+        }}
+        title={showWalkingDirection ? "Inte tillgängligt under navigation" : (isAddingMarker ? "Avbryt" : "Lägg till fynd")}
+      >
+        <span className={`block transition-transform duration-300 ${isAddingMarker ? 'rotate-45' : ''}`}>
+          +
+        </span>
+        {/* Ripple effect background */}
+        <div className={`absolute inset-0 rounded-full bg-white bg-opacity-10 transition-all duration-300 ${
+          isAddingMarker ? 'scale-110 opacity-0' : 'scale-100 opacity-100'
+        }`}></div>
+      </button>
+    </div>
+  </div>
+
+      {/* Floating Car Controls - Bottom */}
+  <div className="fixed top-52 right-2" style={{ zIndex: 10000 }}>
+  {/* Main Car Button */}
+    <button
+      onClick={toggleCarControls}
+      className={`relative w-12 h-12 rounded-full shadow-lg transition-all duration-300 border-2 flex items-center justify-center ${
+        'bg-black/60 border-white' +
+        (isParkingMode ? ' animate-pulse' : '') +
+        (showWalkingDirection ? ' opacity-50 cursor-not-allowed' : '') +
+        ' active:scale-95'
+      } ${showWalkingDirection ? 'opacity-50 cursor-not-allowed' : ''} active:scale-95`}
+      title={
+        showWalkingDirection ? "Inte tillgängligt under navigation" :
+        isParkingMode ? "Avbryt parkering" :
+        carLocation ? (showCarControls ? "Stäng bilkontroller" : "Öppna bilkontroller") :
+        "Parkera bil"
+      }
+    >
+      <span className="text-lg leading-none">
+        {isParkingMode ? '❌' : '🚗'}
+      </span>
+    </button>
 
         {/* Car Control Panel - only show when car is parked and controls are open */}
         {carLocation && showCarControls && (
-          <div className="absolute top-1/2 transform -translate-y-1/2 right-16 flex flex-row gap-2 bg-white/10 backdrop-blur-md rounded-2xl p-3 border border-white/20">
+          <div className="absolute top-1/2 transform -translate-y-1/2 right-16 flex flex-row gap-2 bg-white/10 backdrop-blur-md rounded-2xl p-3 border border-white/20 z-[50000]">
             {/* Find Car Button */}
             <button 
               onClick={findCar}
-              className={`w-10 h-10 rounded-full shadow-md transition-all duration-200 border-2 flex items-center justify-center active:scale-90 ${
+              className={`w-8 h-8 rounded-full shadow-md transition-all duration-200 border-2 flex items-center justify-center active:scale-90 ${
                 showCarDirection 
                   ? 'bg-green-500 border-green-300 shadow-green-500/40 animate-pulse' 
                   : 'bg-blue-500 border-blue-300 shadow-blue-500/30 hover:shadow-blue-500/50'
@@ -1895,7 +2011,7 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
             {/* Remove Car Button */}
             <button 
               onClick={removeCar}
-              className="w-10 h-10 rounded-full shadow-md transition-all duration-200 border-2 bg-red-600 border-red-400 shadow-red-600/30 hover:shadow-red-600/50 active:scale-90 flex items-center justify-center"
+              className="w-8 h-8 rounded-full shadow-md transition-all duration-200 border-2 bg-red-600 border-red-400 shadow-red-600/30 hover:shadow-red-600/50 active:scale-90 flex items-center justify-center"
               title="Ta bort bil helt"
             >
               <span className="text-sm leading-none">🗑️</span>
@@ -1967,7 +2083,7 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
       {/* Finds List Modal */}
       {showFindsList && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4" style={{ zIndex: 20000 }}>
-          <div className="bg-white rounded-3xl p-6 max-w-md w-full max-h-[80vh] overflow-hidden shadow-2xl">
+          <div className="bg-white rounded-3xl p-6 max-w-md w-full max-h-[80vh] overflow-hidden shadow-2xl mt-8">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-xl font-semibold text-gray-800">Mina fynd</h3>
               <button
@@ -2004,7 +2120,7 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
               </div>
             </div>
             
-            <div className="overflow-y-auto max-h-[60vh] -webkit-overflow-scrolling-touch overscroll-contain">
+            <div className="overflow-y-auto max-h-[60vh] -webkit-overflow-scrolling-touch overscroll-contain pb-8 pt-2">
               {markers.length === 0 ? (
                 <div className="text-center py-8 text-gray-500">
                   <div className="text-4xl mb-2">🍄</div>
@@ -2138,12 +2254,12 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
                       [navigationTarget.lat, navigationTarget.lng]
                     ])
                     
-                    // Fit bounds with padding
+                    // Fit bounds with larger padding for better context
                     mapRef.current.fitBounds(bounds, {
-                      padding: [50, 50],
+                      padding: [135, 135],
                       animate: true,
                       duration: 1,
-                      maxZoom: 16
+                      maxZoom: 15
                     })
                   }
                   
@@ -2208,22 +2324,22 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
       )}
 
       {/* Floating Location Button */}
-      <div className="fixed bottom-44 right-8" style={{ zIndex: 10000 }}>
-        <button 
-          onClick={zoomToUserLocation}
-          className="w-12 h-12 rounded-full shadow-lg transition-all duration-300 border-2 bg-blue-500 border-blue-300 shadow-blue-500/30 hover:shadow-blue-500/50 active:scale-95 flex items-center justify-center"
-          title="Hitta min position"
-        >
-          <span className="text-lg leading-none">📍</span>
-        </button>
-      </div>
+  <div className="fixed top-20 right-2" style={{ zIndex: 10000 }}>
+  <button
+      onClick={zoomToUserLocation}
+  className="w-12 h-12 rounded-full shadow-lg transition-all duration-300 border-2 bg-black/60 border-white active:scale-95 flex items-center justify-center"
+      title="Hitta min position"
+    >
+      <span className="text-xl leading-none">📍</span>
+    </button>
+  </div>
 
       {/* Walking Navigation Cancel Button - centered at bottom when walking direction is active */}
       {showWalkingDirection && navigationTarget && (
         <div className="fixed bottom-4 left-1/2 transform -translate-x-1/2" style={{ zIndex: 10000 }}>
           <button 
             onClick={hideWalkingDirection}
-            className="px-6 py-3 rounded-full shadow-lg transition-all duration-300 border-2 bg-red-500 border-red-300 text-white font-medium hover:bg-red-600 active:scale-95"
+            className="px-6 py-3 rounded-full shadow-lg transition-all duration-300 border-2 bg-red-500 border-red-300 text-white text-sm font-medium hover:bg-red-600 active:scale-95"
           >
             Avbryt navigering
           </button>
@@ -2248,28 +2364,28 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
       {/* Walking Navigation Distance Display */}
       {showWalkingDirection && navigationTarget && currentNavigationDistance !== null && (
         <div className="fixed top-20 left-1/2 transform -translate-x-1/2" style={{ zIndex: 10000 }}>
-          <div className="bg-white/95 backdrop-blur-md rounded-2xl px-6 py-3 shadow-lg border border-green-200">
-            <div className="flex items-center gap-3">
-              <span className="text-lg">🚶</span>
+          <div className="bg-white/95 backdrop-blur-md rounded-2xl px-4 py-2 shadow-lg border border-green-200">
+            <div className="flex items-center gap-2">
+              <span className="text-base">🚶</span>
               <div className="text-center">
-                <div className="text-sm text-gray-600 font-medium">Navigerar till</div>
-                <div className="text-lg font-bold text-green-700">{navigationTarget.name}</div>
-                <div className="text-xl font-bold text-green-800">{formatDistance(currentNavigationDistance)}</div>
+                <div className="text-xs text-gray-600 font-medium">Navigerar till</div>
+                <div className="text-sm font-bold text-green-700">{navigationTarget.name}</div>
+                <div className="text-base font-bold text-green-800">{formatDistance(currentNavigationDistance)}</div>
               </div>
             </div>
           </div>
         </div>
       )}
 
-      {/* Map Type Selector - Minimized like car controls */}
-      <div className="fixed bottom-60 right-8" style={{ zIndex: 10000 }}>
+      {/* Map Type Selector - Bottom */}
+  <div className="fixed top-36 right-2" style={{ zIndex: 10000 }}>
         {/* Main Map Button */}
-        <button 
+        <button
           onClick={() => setShowMapSelector(!showMapSelector)}
-          className="relative w-12 h-12 rounded-full shadow-lg transition-all duration-300 border-2 bg-orange-500/90 border-orange-600 shadow-orange-500/30 hover:shadow-orange-500/50 flex items-center justify-center active:scale-95"
+          className="relative w-12 h-12 rounded-full shadow-lg transition-all duration-300 border-2 bg-black/60 border-white active:scale-95 flex items-center justify-center"
           title="Ändra karttyp"
         >
-          <span className="text-1xl leading-none">🌍</span>
+          <span className="text-xl leading-none">🌍</span>
         </button>
 
         {/* Map Type Selection Panel - only show when controls are open */}
