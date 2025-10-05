@@ -1,3 +1,4 @@
+
 # 🍄 Min Svampkarta
 
 En personlig svampkarta där du kan markera platser där du hittat svampar.
