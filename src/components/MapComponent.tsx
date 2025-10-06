@@ -52,6 +52,7 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
 
   const mapContainerRef = useRef<HTMLDivElement>(null)
   const markersLayerRef = useRef<any>(null)
+  const userArrowOverlayRef = useRef<SVGElement | null>(null)
   const [isMapLoaded, setIsMapLoaded] = useState(false)
   const [L, setL] = useState<any>(null)
 
@@ -78,7 +79,25 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
       if (saved) {
         try {
           const parsed = JSON.parse(saved)
-          return [...DEFAULT_CATEGORIES, ...parsed.filter((cat: any) => !DEFAULT_CATEGORIES.find(def => def.id === cat.id))]
+          // Backwards compatible: old format saved as array of custom categories
+          if (Array.isArray(parsed)) {
+            return [...DEFAULT_CATEGORIES, ...parsed.filter((cat: any) => !DEFAULT_CATEGORIES.find(def => def.id === cat.id))]
+          }
+
+          // New format: { customCategories: [...], removedDefaults: [...] }
+          if (parsed && parsed.customCategories) {
+            const removed = parsed.removedDefaults || []
+            // Start from defaults excluding removed ones
+            const base = DEFAULT_CATEGORIES.filter(def => !removed.includes(def.id))
+            // Merge customCategories: override defaults or append new
+            const combined: any[] = [...base]
+            parsed.customCategories.forEach((c: any) => {
+              const idx = combined.findIndex(x => x.id === c.id)
+              if (idx >= 0) combined[idx] = c
+              else combined.push(c)
+            })
+            return combined
+          }
         } catch {
           return [...DEFAULT_CATEGORIES]
         }
@@ -89,10 +108,16 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
   
   const [markers, setMarkers] = useState<MushroomMarker[]>([])
   const [selectedMarker, setSelectedMarker] = useState<MushroomMarker | null>(null)
+  // Whether the marker details modal should be shown. Keep selection separate from modal visibility so
+  // we can select a marker (to force it to render on the map) without opening the details modal.
+  const [showMarkerDetails, setShowMarkerDetails] = useState(false)
   const [isAddingMarker, setIsAddingMarker] = useState(false)
   const [newMarkerForm, setNewMarkerForm] = useState({ name: '', notes: '', abundance: 3, category: 'unknown' })
   const [pendingMarker, setPendingMarker] = useState<{lat: number, lng: number} | null>(null)
   const [showMenu, setShowMenu] = useState(false)
+  // Modal state for Karttyp selection
+  const [showMapTypeModal, setShowMapTypeModal] = useState(false)
+  // (remove dropdown state) const [showMapTypeDropdown, setShowMapTypeDropdown] = useState(false)
   const [userLocation, setUserLocation] = useState<{lat: number, lng: number} | null>(null)
   const [userHeading, setUserHeading] = useState<number | null>(null)
   const [userSpeed, setUserSpeed] = useState<number | null>(null)
@@ -163,6 +188,24 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
   const [newCategoryForm, setNewCategoryForm] = useState({ name: '', emoji: '🍄' })
   const [editingCategory, setEditingCategory] = useState<any>(null)
   const [isEditMode, setIsEditMode] = useState(false)
+
+  // --- KATEGORIFILTER FÖR KARTA ---
+  const [showCategoryFilter, setShowCategoryFilter] = useState(false)
+  // Helper: returnera alla kategori-id (default: alla syns)
+  const getAllCategoryIds = (cats: {id: string}[]) => cats.map(cat => cat.id);
+  
+  // State: vilka kategorier ska synas på kartan?
+  const [visibleCategoryIds, setVisibleCategoryIds] = useState<string[]>(() => getAllCategoryIds(categories));
+  
+  // Om kategorier ändras (t.ex. ny kategori), visa alla som default
+  useEffect(() => {
+    setVisibleCategoryIds(getAllCategoryIds(categories));
+  }, [categories.length]);
+
+  // When selectedMarker is cleared from other actions, ensure showMarkerDetails is also cleared
+  useEffect(() => {
+    if (!selectedMarker) setShowMarkerDetails(false)
+  }, [selectedMarker])
 
   // Ref to track if user is manually panning the map (prevents auto-centering during navigation)
 
@@ -277,6 +320,10 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
             setUserLocation({ lat: latitude, lng: longitude });
             setLocationStatus('found');
             setUserSpeed(position.coords.speed ?? null);
+            // Use device-provided heading if available
+            if (typeof position.coords.heading === 'number' && !isNaN(position.coords.heading)) {
+              setUserHeading(position.coords.heading)
+            }
             updateUserMarker(latitude, longitude);
             if (mapRef.current) {
               mapRef.current.setView([latitude, longitude], 15, {
@@ -323,6 +370,9 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
             console.log('Location update (web):', latitude, longitude, 'accuracy:', accuracy);
             setUserLocation({ lat: latitude, lng: longitude });
             setUserSpeed(position.coords.speed ?? null);
+            if (typeof position.coords.heading === 'number' && !isNaN(position.coords.heading)) {
+              setUserHeading(position.coords.heading)
+            }
             updateUserMarker(latitude, longitude);
           },
           (error) => {
@@ -413,35 +463,41 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
 
     // Calculate heading if previous location exists and movement is significant
     let heading: number | null = null;
-    if (prevUserLocation.current) {
-      const dist = calculateDistance(prevUserLocation.current.lat, prevUserLocation.current.lng, lat, lng);
-      if (dist > 0.0001) { // ~10m
-        heading = calculateHeading(prevUserLocation.current.lat, prevUserLocation.current.lng, lat, lng);
-        setUserHeading(heading);
-      }
+    const prev = prevUserLocation.current;
+    const distKm = prev ? calculateDistance(prev.lat, prev.lng, lat, lng) : 0;
+    const distMeters = distKm * 1000;
+    if (prev && distMeters > 0.5) { // only compute heading if moved > 0.5m
+      heading = calculateHeading(prev.lat, prev.lng, lat, lng);
+      setUserHeading(heading);
     }
+    // Update prev location after computing distance/heading
     prevUserLocation.current = { lat, lng };
 
     // User marker: small blue dot with white border, and arrow if heading, size scales with zoom
-    const { dotSize: baseDotSize } = getZoomBasedSizes(mapZoom);
-    // Clamp dot size to a more visible range (min 10, max 18)
-    const dotSize = Math.max(10, Math.min(18, baseDotSize || 12));
-    const whiteBorder = 2;
-    const blackBorder = 2;
-    const arrowSize = Math.round(dotSize * 1.2);
-  // Visa pil alltid om heading finns
-  const showArrow = userHeading !== null;
-  const arrowHtml = (showArrow ? `<svg width="${arrowSize}" height="${arrowSize}" style="position:absolute;left:50%;top:50%;transform:translate(-50%,-120%) rotate(${userHeading}deg);z-index:2;pointer-events:none;" viewBox="0 0 24 24"><polygon points="12,2 16,14 12,11 8,14" fill="#2563eb" stroke="white" stroke-width="1.5"/></svg>` : '');
+  const { dotSize: baseDotSize } = getZoomBasedSizes(mapZoom);
+  // Clamp dot size to a more visible range (min 10, max 18)
+  const dotSize = Math.max(10, Math.min(18, baseDotSize || 12));
+  const whiteBorder = 2;
+  const blackBorder = 2;
+  // Make the arrow same size as the user dot (including borders) per user's request
+  const dotTotal = dotSize + 2 * (whiteBorder + blackBorder);
+  const arrowSize = dotTotal;
+  const arrowStroke = Math.max(1, Math.round(arrowSize / 12));
+  // Use the freshly computed heading when available so the arrow shows immediately
+  const displayHeading = (heading !== null) ? heading : userHeading
+  // Only show arrow when we have a heading and the user has moved more than 1 meter
+  const showArrow = displayHeading !== null && distMeters >= 1
+
+    // Inline arrow removed from divIcon — overlay will draw the arrow
     const userHtml = `
-      <div style="position:relative;width:${dotSize + 2 * (whiteBorder + blackBorder)}px;height:${dotSize + 2 * (whiteBorder + blackBorder)}px;display:flex;align-items:center;justify-content:center;">
-        <div style="background:#000;border-radius:50%;width:${dotSize + 2 * (whiteBorder + blackBorder)}px;height:${dotSize + 2 * (whiteBorder + blackBorder)}px;position:absolute;left:0;top:0;"></div>
-        <div style="background:#fff;border-radius:50%;width:${dotSize + 2 * whiteBorder}px;height:${dotSize + 2 * whiteBorder}px;position:absolute;left:${blackBorder}px;top:${blackBorder}px;"></div>
-        <div style="background:#2563eb;border-radius:50%;width:${dotSize}px;height:${dotSize}px;position:absolute;left:${blackBorder + whiteBorder}px;top:${blackBorder + whiteBorder}px;box-shadow:0 1px 4px rgba(0,0,0,0.18);"></div>
-        ${arrowHtml}
+      <div style="position:relative;overflow:visible;width:${dotTotal}px;height:${dotTotal}px;display:flex;align-items:center;justify-content:center;">
+        <div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:${dotSize + 2 * (whiteBorder + blackBorder)}px;height:${dotSize + 2 * (whiteBorder + blackBorder)}px;border-radius:50%;background:#000;"></div>
+        <div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:${dotSize + 2 * whiteBorder}px;height:${dotSize + 2 * whiteBorder}px;border-radius:50%;background:#fff;"></div>
+        <div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:${dotSize}px;height:${dotSize}px;border-radius:50%;background:#2563eb;box-shadow:0 1px 4px rgba(0,0,0,0.18);"></div>
       </div>
     `;
-    // Adjust icon size and anchor for new borders
-    const totalSize = dotSize + 2 * (whiteBorder + blackBorder);
+    // Use dotTotal as the marker container (arrow is separate overlay)
+    const totalSize = dotTotal;
     const userLocationIcon = L.divIcon({
       html: userHtml,
       className: 'user-location-marker',
@@ -450,6 +506,52 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
     });
 
     L.marker([lat, lng], { icon: userLocationIcon }).addTo(mapRef.current);
+
+    // Also render a separate SVG overlay in the map overlayPane so the arrow is not clipped
+    try {
+      if (mapRef.current && mapRef.current.getPanes) {
+        const panes = mapRef.current.getPanes()
+        const overlayPane = panes && panes.overlayPane
+        if (overlayPane) {
+          const point = mapRef.current.latLngToLayerPoint([lat, lng])
+          const overlaySize = arrowSize
+
+          if (showArrow) {
+            // Create overlay if missing
+            if (!userArrowOverlayRef.current) {
+              const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg') as unknown as SVGElement
+              svg.setAttribute('width', `${overlaySize}`)
+              svg.setAttribute('height', `${overlaySize}`)
+              svg.setAttribute('viewBox', '0 0 240 240')
+              svg.style.position = 'absolute'
+              svg.style.pointerEvents = 'none'
+              svg.style.zIndex = '1500'
+              overlayPane.appendChild(svg)
+              userArrowOverlayRef.current = svg
+            }
+
+            // Update SVG content and position
+            const svgEl = userArrowOverlayRef.current as any
+            if (svgEl) {
+              svgEl.setAttribute('width', `${overlaySize}`)
+              svgEl.setAttribute('height', `${overlaySize}`)
+              svgEl.setAttribute('viewBox', '0 0 240 240')
+              svgEl.style.left = `${Math.round(point.x - overlaySize/2)}px`
+              svgEl.style.top = `${Math.round(point.y - overlaySize/2)}px`
+              svgEl.innerHTML = `<polygon points="120,10 230,230 120,180 10,230" fill="rgba(37,99,235,0.96)" stroke="#0f172a" stroke-width="${arrowStroke}" stroke-linejoin="round" stroke-linecap="round" transform="rotate(${displayHeading},120,120)" />`
+            }
+          } else {
+            // Remove overlay if present
+            if (userArrowOverlayRef.current && userArrowOverlayRef.current.parentNode) {
+              try { userArrowOverlayRef.current.parentNode.removeChild(userArrowOverlayRef.current) } catch(e) {}
+              userArrowOverlayRef.current = null
+            }
+          }
+        }
+      }
+    } catch (e) {
+      // ignore overlay errors
+    }
   }
 
   // Distance calculation function using Haversine formula
@@ -634,6 +736,8 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
     const marker = L.marker([lat, lng], { icon: carIcon })
       .addTo(mapRef.current)
     marker.on('click', () => {
+      // Cancel any existing navigation to a mushroom before handling the car click
+      clearExistingNavigation()
       // Always zoom to show both user and car when clicking the marker
       if (userLocation && mapRef.current) {
         const bounds = L.latLngBounds([
@@ -1348,13 +1452,22 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
   }, [L, currentMapType])
 
   // Add markers to map
+  // Create stable, primitive keys for complex state so the dependency array length/order stays constant
+  const visibleCategoryIdsKey = visibleCategoryIds.join('|')
+  const selectedMarkerId = selectedMarker ? selectedMarker.id : null
+  const navigationTargetId = navigationTarget ? navigationTarget.id : null
+
   useEffect(() => {
     if (!markersLayerRef.current || !L) return
 
     markersLayerRef.current.clearLayers()
 
+    // Filtrera markers som ska visas på kartan baserat på valda kategorier
+    // Men se till att den marker som användaren har valt från listan alltid inkluderas
+  const filteredMarkers = markers.filter(marker => visibleCategoryIds.includes(marker.category) || (selectedMarkerId !== null && marker.id === selectedMarkerId))
+
     // Add markers to map
-    markers.forEach(marker => {
+    filteredMarkers.forEach(marker => {
       // Hide other mushrooms during walking navigation, only show target
       if (showWalkingDirection && navigationTarget && marker.id !== navigationTarget.id) {
         return // Skip rendering this marker
@@ -1441,12 +1554,17 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
       
       // Add click handler to open marker details with navigation options
       leafletMarker.on('click', () => {
+        // Clicking the marker on the map should cancel any existing navigation
+        // (walking or car) and open the details modal for the clicked marker.
+        clearExistingNavigation()
         setSelectedMarker(marker)
+        setShowMarkerDetails(true)
       })
       
       markersLayerRef.current?.addLayer(leafletMarker)
     })
-  }, [markers, L, mapZoom])
+  // Depend on stable primitives (strings/ids/lengths) rather than raw objects/arrays which may change shape
+  }, [markers, L, mapZoom, visibleCategoryIdsKey, showWalkingDirection, navigationTargetId, categories.length, selectedMarkerId])
 
   // Handle map clicks for adding markers
   useEffect(() => {
@@ -1678,13 +1796,15 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
   // Backup and Restore Functions
   const exportFinds = () => {
     const customCategories = categories.filter(cat => !DEFAULT_CATEGORIES.find(def => def.id === cat.id))
+    const removedDefaults = DEFAULT_CATEGORIES.filter(def => !categories.find(cat => cat.id === def.id)).map(d => d.id)
     const backupData = {
       version: "1.0",
       exportDate: new Date().toISOString(),
       markers: markers,
       carLocation: carLocation,
       customCategories: customCategories,
-      appName: "Min svampkarta"
+      removedDefaults: removedDefaults,
+      appName: "Min Svampkarta"
     }
     
     const dataStr = JSON.stringify(backupData, null, 2)
@@ -1709,11 +1829,31 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
     const reader = new FileReader()
     reader.onload = (e) => {
       try {
-        const backupData = JSON.parse(e.target?.result as string)
-        
-        if (backupData.appName === "Min Svampkarta" && backupData.markers) {
+        // Strip potential BOM and trim whitespace before parsing
+        const rawText = (e.target?.result as string) || ''
+        const cleaned = rawText.replace(/^\uFEFF/, '').trim()
+        const backupData = JSON.parse(cleaned)
+
+        // Locate markers array (be tolerant to variations in export format)
+        let markersArray: any[] | null = null
+        if (Array.isArray(backupData.markers)) {
+          markersArray = backupData.markers
+        } else if (backupData.markers && typeof backupData.markers === 'object') {
+          // Coerce object map to array
+          markersArray = Object.values(backupData.markers)
+        } else {
+          // Search for any top-level array property that likely contains markers
+          for (const k of Object.keys(backupData)) {
+            if (Array.isArray((backupData as any)[k])) {
+              markersArray = (backupData as any)[k]
+              break
+            }
+          }
+        }
+
+        if (markersArray && Array.isArray(markersArray)) {
           // Restore markers with backward compatibility for category field
-          const markersWithCategories = backupData.markers.map((marker: any) => ({
+          const markersWithCategories = markersArray.map((marker: any) => ({
             ...marker,
             category: marker.category || 'edible' // Default to 'edible' if category is missing
           }))
@@ -1728,7 +1868,14 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
           
           // Restore custom categories if exists
           if (backupData.customCategories) {
-            const restoredCategories = [...DEFAULT_CATEGORIES, ...backupData.customCategories]
+            const removed = backupData.removedDefaults || []
+            const base = DEFAULT_CATEGORIES.filter((def: any) => !removed.includes(def.id))
+            const restoredCategories = [...base]
+            backupData.customCategories.forEach((c: any) => {
+              const idx = restoredCategories.findIndex((x: any) => x.id === c.id)
+              if (idx >= 0) restoredCategories[idx] = c
+              else restoredCategories.push(c)
+            })
             setCategories(restoredCategories)
             saveCategoriesToStorage(restoredCategories)
           }
@@ -1736,6 +1883,7 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
           alert(`✅ Backup återställd! ${backupData.markers.length} fynd importerade.`)
           setShowBackupDialog(false)
         } else {
+          console.error('Invalid backup format, parsed object:', backupData)
           alert('❌ Ogiltig backup-fil. Kontrollera att filen kommer från Min Svampkarta.')
         }
       } catch (error) {
@@ -1752,8 +1900,11 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
   // Category Management Functions
   const saveCategoriesToStorage = (categoriesList: any[]) => {
     if (typeof window !== 'undefined') {
+      // Persist as structured object to support overrides and removed defaults
       const customCategories = categoriesList.filter(cat => !DEFAULT_CATEGORIES.find(def => def.id === cat.id))
-      localStorage.setItem('svampkartan-categories', JSON.stringify(customCategories))
+      const removedDefaults = DEFAULT_CATEGORIES.filter(def => !categoriesList.find(cat => cat.id === def.id)).map(d => d.id)
+      const payload = { customCategories, removedDefaults }
+      localStorage.setItem('svampkartan-categories', JSON.stringify(payload))
     }
   }
 
@@ -1822,18 +1973,28 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
   }
 
   const deleteCategory = (categoryId: string) => {
-    // Don't allow deleting default categories
-    if (DEFAULT_CATEGORIES.find(cat => cat.id === categoryId)) {
-      alert('❌ Standardkategorier kan inte tas bort')
-      return
-    }
+    const isDefault = !!DEFAULT_CATEGORIES.find(cat => cat.id === categoryId)
+    const confirmMsg = isDefault
+      ? 'Detta är en standardkategori. Om du tar bort den kommer den att tas bort från listan och fynd som använder den kommer att få kategorin "Okända". Vill du fortsätta?'
+      : 'Är du säker på att du vill ta bort denna kategori?'
 
-    if (confirm('Är du säker på att du vill ta bort denna kategori?')) {
-      const updatedCategories = categories.filter(cat => cat.id !== categoryId)
-      setCategories(updatedCategories)
-      saveCategoriesToStorage(updatedCategories)
-      alert('✅ Kategorin har tagits bort')
-    }
+    if (!confirm(confirmMsg)) return
+
+    // Remove the category from the list
+    const updatedCategories = categories.filter(cat => cat.id !== categoryId)
+    setCategories(updatedCategories)
+    saveCategoriesToStorage(updatedCategories)
+
+    // Update markers that use this category to use the 'unknown' category
+    const updatedMarkers = markers.map(marker => 
+      marker.category === categoryId
+        ? { ...marker, category: (DEFAULT_CATEGORIES.find(d => d.id === 'unknown')?.id || 'unknown') }
+        : marker
+    )
+    setMarkers(updatedMarkers)
+    localStorage.setItem('svampkartan-markers', JSON.stringify(updatedMarkers))
+
+    alert('✅ Kategorin har tagits bort')
   }
 
   const cancelAddMarker = () => {
@@ -1949,11 +2110,11 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
 
         {/* Dropdown Menu */}
         {showMenu && (
-          <div className="absolute top-full right-2 sm:right-4 mt-1 bg-white/95 backdrop-blur-md rounded-lg sm:rounded-xl shadow-2xl border border-white/20 min-w-40 sm:min-w-48 py-1 sm:py-2 max-h-[80vh] overflow-y-auto" style={{ zIndex: 50000 }}>
-            <div className="px-3 sm:px-4 py-1.5 sm:py-2 text-gray-600 text-xs sm:text-sm border-b border-gray-200/50">
-              <div className="font-medium">Meny</div>
+          <div className="absolute top-full right-2 sm:right-4 mt-0.5 bg-white/95 backdrop-blur-md rounded-lg sm:rounded-xl shadow-2xl border border-white/20 min-w-40 sm:min-w-48 py-0.5 sm:py-1 max-h-[80vh] overflow-y-auto" style={{ zIndex: 50000 }} onClick={e => e.stopPropagation()}>
+            <div className="px-3 sm:px-4 py-1 sm:py-1 text-gray-700 text-sm sm:text-base border-b border-gray-200/50">
+              <div className="font-semibold text-emerald-700">Meny</div>
             </div>
-            <div className="py-0.5 sm:py-1">
+            <div className="py-0 sm:py-0">
               <button 
                 onClick={() => {
                   // Cancel walking navigation when opening finds list
@@ -1963,34 +2124,20 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
                   setShowFindsList(true)
                   setShowMenu(false)
                 }}
-                className="w-full px-3 sm:px-4 py-1.5 sm:py-2 text-left text-gray-700 hover:bg-white/50 transition-colors flex items-center gap-2 sm:gap-3"
+                className="w-full px-3 sm:px-4 py-1 sm:py-1 text-left text-gray-700 hover:bg-white/50 transition-colors flex items-center gap-2 sm:gap-3"
               >
                 <span className="text-base sm:text-lg">📋</span>
-                <span className="font-medium text-sm sm:text-base">Mina fynd</span>
+                <span className="font-medium text-xs sm:text-sm">Mina fynd</span>
               </button>
-            </div>
-            <div className="py-0.5 sm:py-1">
               <button 
                 onClick={() => {
-                  setShowCredits(true)
+                  setShowCategoryFilter(true)
                   setShowMenu(false)
                 }}
-                className="w-full px-3 sm:px-4 py-1.5 sm:py-2 text-left text-gray-700 hover:bg-white/50 transition-colors flex items-center gap-2 sm:gap-3"
+                className="w-full px-3 sm:px-4 py-1 sm:py-1 text-left text-gray-700 hover:bg-white/50 transition-colors flex items-center gap-2 sm:gap-3"
               >
-                <span className="text-base sm:text-lg">ℹ️</span>
-                <span className="font-medium text-sm sm:text-base">Om appen</span>
-              </button>
-            </div>
-            <div className="py-0.5 sm:py-1">
-              <button 
-                onClick={() => {
-                  setShowBackupDialog(true)
-                  setShowMenu(false)
-                }}
-                className="w-full px-3 sm:px-4 py-1.5 sm:py-2 text-left text-gray-700 hover:bg-white/50 transition-colors flex items-center gap-2 sm:gap-3"
-              >
-                <span className="text-base sm:text-lg">💾</span>
-                <span className="font-medium text-sm sm:text-base">Säkerhetskopiera</span>
+                <span className="text-base sm:text-lg">🏷️</span>
+                <span className="font-medium text-xs sm:text-sm">Välj kategorier</span>
               </button>
               <button
                 onClick={() => {
@@ -1998,24 +2145,38 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
                   setIsEditMode(false)
                   setShowMenu(false)
                 }}
-                className="w-full px-3 sm:px-4 py-1.5 sm:py-2 text-left text-gray-700 hover:bg-white/50 transition-colors flex items-center gap-2 sm:gap-3"
+                className="w-full px-3 sm:px-4 py-1 sm:py-1 text-left text-gray-700 hover:bg-white/50 transition-colors flex items-center gap-2 sm:gap-3"
               >
                 <span className="text-base sm:text-lg">✏️</span>
-                <span className="font-medium text-sm sm:text-base">Hantera kategorier</span>
+                <span className="font-medium text-xs sm:text-sm">Redigera kategorier</span>
               </button>
-            </div>
-            <div>
-              {/* Kartval sektion */}
-              <div className="py-0.5 sm:py-1 border-t border-gray-200/50 mt-1">
-                <div className="px-3 sm:px-4 py-1.5 sm:py-2 text-gray-600 text-xs sm:text-sm font-medium">Karttyp</div>
-                <div className="flex flex-col gap-1 px-3 sm:px-4 pb-2">
-                  <button onClick={() => { changeMapType('opentopo'); setShowMenu(false); }} className={`py-1.5 rounded text-left text-sm ${currentMapType === 'opentopo' ? 'bg-green-100 text-green-800 font-semibold' : 'hover:bg-gray-100 text-gray-700'}`}>OpenTopo</button>
-                  <button onClick={() => { changeMapType('mml-topo'); setShowMenu(false); }} className={`py-1.5 rounded text-left text-sm ${currentMapType === 'mml-topo' ? 'bg-green-100 text-green-800 font-semibold' : 'hover:bg-gray-100 text-gray-700'}`}>MML Topo (FIN)</button>
-                  <button onClick={() => { changeMapType('mml-satellite'); setShowMenu(false); }} className={`py-1.5 rounded text-left text-sm ${currentMapType === 'mml-satellite' ? 'bg-green-100 text-green-800 font-semibold' : 'hover:bg-gray-100 text-gray-700'}`}>MML Satellite (FIN)</button>
-                  <button onClick={() => { changeMapType('lantmateriet'); setShowMenu(false); }} className={`py-1.5 rounded text-left text-sm ${currentMapType === 'lantmateriet' ? 'bg-green-100 text-green-800 font-semibold' : 'hover:bg-gray-100 text-gray-700'}`}>Lantmäteriet Topo (SWE)</button>
-                  <button onClick={() => { changeMapType('lantmateriet-satellite'); setShowMenu(false); }} className={`py-1.5 rounded text-left text-sm ${currentMapType === 'lantmateriet-satellite' ? 'bg-green-100 text-green-800 font-semibold' : 'hover:bg-gray-100 text-gray-700'}`}>Lantmäteriet Satellite (SWE)</button>
-                </div>
-              </div>
+              <button
+                onClick={() => setShowMapTypeModal(true)}
+                className="w-full px-3 sm:px-4 py-1 sm:py-1 text-left text-gray-700 hover:bg-white/50 transition-colors flex items-center gap-2 sm:gap-3"
+              >
+                <span className="text-base sm:text-lg">🗺️</span>
+                <span className="font-medium text-xs sm:text-sm">Karttyp</span>
+              </button>
+              <button 
+                onClick={() => {
+                  setShowBackupDialog(true)
+                  setShowMenu(false)
+                }}
+                className="w-full px-3 sm:px-4 py-1 sm:py-1 text-left text-gray-700 hover:bg-white/50 transition-colors flex items-center gap-2 sm:gap-3"
+              >
+                <span className="text-base sm:text-lg">💾</span>
+                <span className="font-medium text-xs sm:text-sm">Säkerhetskopiera</span>
+              </button>
+              <button 
+                onClick={() => {
+                  setShowCredits(true)
+                  setShowMenu(false)
+                }}
+                className="w-full px-3 sm:px-4 py-1 sm:py-1 text-left text-gray-700 hover:bg-white/50 transition-colors flex items-center gap-2 sm:gap-3"
+              >
+                <span className="text-base sm:text-lg">ℹ️</span>
+                <span className="font-medium text-xs sm:text-sm">Om appen</span>
+              </button>
             </div>
             {/* Spacer för att sista menyvalet alltid ska gå att skrolla fram */}
             <div style={{ height: 30, pointerEvents: 'none' }} />
@@ -2024,6 +2185,22 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
       </div>
 
       {/* Welcome Popup - Only shows once */}
+      {/* Karttyp Modal */}
+      {showMapTypeModal && (
+        <div className="fixed inset-0 z-[60000] flex items-center justify-center bg-black/40 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-xs border border-emerald-200 animate-fade-in">
+            <h2 className="text-lg font-semibold text-emerald-700 mb-4 text-center">Välj karttyp</h2>
+            <div className="flex flex-col gap-2">
+              <button onClick={() => { changeMapType('opentopo'); setShowMapTypeModal(false); }} className={`py-2 rounded text-left text-sm ${currentMapType === 'opentopo' ? 'bg-green-100 text-green-800 font-semibold' : 'hover:bg-gray-100 text-gray-700'}`}>OpenTopo</button>
+              <button onClick={() => { changeMapType('mml-topo'); setShowMapTypeModal(false); }} className={`py-2 rounded text-left text-sm ${currentMapType === 'mml-topo' ? 'bg-green-100 text-green-800 font-semibold' : 'hover:bg-gray-100 text-gray-700'}`}>MML Topo (FIN)</button>
+              <button onClick={() => { changeMapType('mml-satellite'); setShowMapTypeModal(false); }} className={`py-2 rounded text-left text-sm ${currentMapType === 'mml-satellite' ? 'bg-green-100 text-green-800 font-semibold' : 'hover:bg-gray-100 text-gray-700'}`}>MML Satellite (FIN)</button>
+              <button onClick={() => { changeMapType('lantmateriet'); setShowMapTypeModal(false); }} className={`py-2 rounded text-left text-sm ${currentMapType === 'lantmateriet' ? 'bg-green-100 text-green-800 font-semibold' : 'hover:bg-gray-100 text-gray-700'}`}>Lantmäteriet Topo (SWE)</button>
+              <button onClick={() => { changeMapType('lantmateriet-satellite'); setShowMapTypeModal(false); }} className={`py-2 rounded text-left text-sm ${currentMapType === 'lantmateriet-satellite' ? 'bg-green-100 text-green-800 font-semibold' : 'hover:bg-gray-100 text-gray-700'}`}>Lantmäteriet Sat (SWE)</button>
+            </div>
+            <button className="mt-6 w-full py-2 rounded-xl bg-gray-200 text-gray-700 font-medium hover:bg-gray-300 transition" onClick={() => setShowMapTypeModal(false)}>Stäng</button>
+          </div>
+        </div>
+      )}
       {showWelcome && (
         <div className="fixed inset-0 z-[20000] flex items-center justify-center bg-black/40 backdrop-blur-sm">
           <div className="bg-white rounded-3xl shadow-2xl p-8 max-w-xs w-full text-center border border-emerald-200 animate-fade-in">
@@ -2267,6 +2444,12 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
                           onClick={() => {
                             if (mapRef.current) {
                               mapRef.current.setView([marker.lat, marker.lng], 15)
+                              // Ensure this marker becomes selected and rendered even if its category is hidden
+                              // Cancel any existing navigation (walking/car) when selecting a new target
+                              clearExistingNavigation()
+                              // but do NOT open the details modal - just select it so the map shows the pin.
+                              setSelectedMarker(marker)
+                              setShowMarkerDetails(false)
                               setShowFindsList(false)
                             }
                           }}
@@ -2324,6 +2507,69 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
                 </p>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Category Filter Dialog */}
+      {showCategoryFilter && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center p-3" style={{ zIndex: 20000 }}>
+          <div className="bg-white rounded-2xl p-4 max-w-sm w-full max-h-[78vh] overflow-hidden shadow-lg mt-6">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-lg font-semibold text-gray-800">Filtrera kategorier</h3>
+              <button
+                onClick={() => setShowCategoryFilter(false)}
+                className="w-7 h-7 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center transition-colors text-sm"
+              >
+                ✕
+              </button>
+            </div>
+
+            <p className="text-xs text-gray-600 mb-3">
+              Välj vilka kategorier som ska visas på kartan
+            </p>
+
+            <div className="space-y-1 max-h-[60vh] overflow-y-auto pb-2">
+              {categories.map(cat => (
+                <label 
+                  key={cat.id} 
+                  className="flex items-center gap-2 p-2 rounded-lg hover:bg-gray-50 cursor-pointer transition-colors border border-gray-50"
+                >
+                  <input
+                    type="checkbox"
+                    checked={visibleCategoryIds.includes(cat.id)}
+                    onChange={e => {
+                      if (e.target.checked) {
+                        setVisibleCategoryIds(ids => [...ids, cat.id]);
+                      } else {
+                        setVisibleCategoryIds(ids => ids.filter(id => id !== cat.id));
+                      }
+                    }}
+                    className="w-4 h-4 accent-green-500"
+                  />
+                  <span className="text-lg">{cat.emoji}</span>
+                  <span className="font-medium text-gray-800 text-sm flex-1 truncate">{cat.name}</span>
+                  <span className="text-xs text-gray-500">
+                    {markers.filter(m => m.category === cat.id).length} fynd
+                  </span>
+                </label>
+              ))}
+            </div>
+
+            <div className="flex gap-2 mt-4">
+              <button
+                onClick={() => setVisibleCategoryIds(getAllCategoryIds(categories))}
+                className="flex-1 px-3 py-2 bg-gray-100 text-gray-700 rounded-lg font-medium hover:bg-gray-200 transition-colors text-sm"
+              >
+                Visa alla
+              </button>
+              <button
+                onClick={() => setShowCategoryFilter(false)}
+                className="flex-1 px-3 py-2 bg-gradient-to-r from-green-500 to-green-600 text-white rounded-lg font-medium hover:from-green-600 hover:to-green-700 transition-colors text-sm"
+              >
+                Klar
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -2632,12 +2878,15 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
         </div>
       )}
 
-      {/* Modern Marker Details Modal */}
-      {selectedMarker && (
+  {/* Modern Marker Details Modal */}
+  {selectedMarker && showMarkerDetails && (
         <div 
           className="fixed inset-0 bg-black/20 backdrop-blur-sm flex items-center justify-center p-4"
           style={{ zIndex: 10001 }}
-          onClick={() => setSelectedMarker(null)}
+            onClick={() => {
+              setSelectedMarker(null)
+              setShowMarkerDetails(false)
+            }}
         >
           <div 
             className="bg-white/90 backdrop-blur-md rounded-2xl shadow-2xl max-w-sm w-full border border-white/20"
@@ -2754,7 +3003,10 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
               {/* Action Buttons */}
               <div className="flex gap-3">
                 <button
-                  onClick={() => setSelectedMarker(null)}
+                  onClick={() => {
+                    setSelectedMarker(null)
+                    setShowMarkerDetails(false)
+                  }}
                   className="flex-1 px-4 py-3 bg-gradient-to-r from-gray-400 to-gray-500 text-white rounded-xl font-medium shadow-lg hover:from-gray-500 hover:to-gray-600 transition-all duration-200 transform hover:scale-[1.02]"
                 >
                   Stäng
@@ -2770,6 +3022,8 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
           </div>
         </div>
       )}
+
+      
 
       {/* Edit Marker Modal */}
       {isEditingMarker && selectedMarker && (
@@ -3051,12 +3305,12 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
 
       {/* Category Management Dialog */}
       {showAddCategoryDialog && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[10001] p-2 sm:p-4">
-          <div className="bg-white rounded-2xl sm:rounded-3xl max-w-lg w-full mx-2 sm:mx-4 shadow-2xl transform transition-all duration-300 max-h-[95vh] sm:max-h-[90vh] overflow-y-auto">
-            <div className="p-4 sm:p-6 lg:p-8">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60001] p-2 sm:p-4">
+          <div className="bg-white rounded-2xl sm:rounded-3xl w-full mx-2 sm:mx-4 shadow-2xl transform transition-all duration-300 max-w-[min(95vw,700px)] max-h-[90vh]">
+            <div className="p-3 sm:p-4 lg:p-6 max-h-[86vh] overflow-y-auto">
               <div className="flex items-center justify-between mb-4 sm:mb-6">
                 <h3 className="text-lg sm:text-xl lg:text-2xl font-bold text-gray-800">
-                  Hantera kategorier
+                  Redigera kategorier
                 </h3>
                 <button
                   onClick={cancelAddCategory}
@@ -3070,48 +3324,39 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
               <div className="mb-6 sm:mb-8">
                 <h4 className="text-base sm:text-lg font-semibold text-gray-800 mb-3 sm:mb-4">Befintliga kategorier</h4>
                 <div className="space-y-2 max-h-48 sm:max-h-60 overflow-y-auto">
-                  {categories.filter(cat => !DEFAULT_CATEGORIES.find(def => def.id === cat.id)).length === 0 ? (
-                    <p className="text-gray-500 italic text-center py-3 sm:py-4 text-sm sm:text-base">Inga anpassade kategorier än</p>
+                  {categories.length === 0 ? (
+                    <p className="text-gray-500 italic text-center py-3 sm:py-4 text-sm sm:text-base">Inga kategorier</p>
                   ) : (
-                    categories.filter(cat => !DEFAULT_CATEGORIES.find(def => def.id === cat.id)).map(category => (
-                      <div key={category.id} className="flex items-center justify-between py-0.5 px-2 sm:p-2 bg-gray-50 rounded-lg min-w-0">
-                        <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
-                          <span className="text-base sm:text-xl flex-shrink-0">{category.emoji}</span>
-                          <span className="font-medium text-gray-800 text-sm sm:text-base truncate">{category.name}</span>
+                    categories.map(category => {
+                      const isDefault = !!DEFAULT_CATEGORIES.find(def => def.id === category.id)
+                      return (
+                        <div key={category.id} className="flex items-center justify-between py-0 px-2 sm:py-0.5 sm:px-2 bg-gray-50 rounded-lg min-w-0">
+                          <div className="flex items-center gap-2 sm:gap-2 min-w-0 flex-1">
+                            <span className="text-sm sm:text-base flex-shrink-0 w-6 h-6 flex items-center justify-center">{category.emoji}</span>
+                            <span className="font-medium text-gray-800 text-sm truncate">{category.name}</span>
+                            {isDefault && <span className="ml-2 text-[10px] text-gray-500 bg-gray-100 px-2 py-0.5 rounded">Standard</span>}
+                          </div>
+                          <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
+                            <button
+                              onClick={() => startEditCategory(category)}
+                              className="w-8 h-6 sm:w-10 sm:h-6 px-2 bg-blue-500 text-white text-xs sm:text-sm rounded sm:rounded-lg hover:bg-blue-600 transition-colors flex items-center justify-center"
+                              title={`Redigera ${category.name}`}
+                              aria-label={`Redigera ${category.name}`}
+                            >
+                              <span className="text-sm sm:text-base">✏️</span>
+                            </button>
+                            <button
+                              onClick={() => deleteCategory(category.id)}
+                              className="w-8 h-6 sm:w-10 sm:h-6 px-2 bg-red-500 text-white text-xs sm:text-sm rounded sm:rounded-lg hover:bg-red-600 transition-colors flex items-center justify-center"
+                              title={`Ta bort ${category.name}`}
+                              aria-label={`Ta bort ${category.name}`}
+                            >
+                              <span className="text-sm sm:text-base">🗑️</span>
+                            </button>
+                          </div>
                         </div>
-                        <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
-                          <button
-                            onClick={() => startEditCategory(category)}
-                            className="w-10 h-2 sm:px-3 sm:py-1 bg-blue-500 text-white text-xs sm:text-sm rounded sm:rounded-lg hover:bg-blue-600 transition-colors flex items-center justify-center"
-                          >
-                            <span className="sm:hidden text-xs">✏️</span>
-                            <span className="hidden sm:inline">Redigera</span>
-                          </button>
-                          <button
-                            onClick={() => {
-                              if (confirm(`Är du säker på att du vill ta bort kategorin "${category.name}"?`)) {
-                                const updatedCategories = categories.filter(cat => cat.id !== category.id)
-                                setCategories(updatedCategories)
-                                localStorage.setItem('mushroom-categories', JSON.stringify(updatedCategories))
-                                
-                                // Update markers that use this category to use the default category
-                                const updatedMarkers = markers.map(marker => 
-                                  marker.category === category.id 
-                                    ? { ...marker, category: DEFAULT_CATEGORIES[0].id }
-                                    : marker
-                                )
-                                setMarkers(updatedMarkers)
-                                localStorage.setItem('svampkartan-markers', JSON.stringify(updatedMarkers))
-                              }
-                            }}
-                            className="w-10 h-2 sm:px-3 sm:py-1 bg-red-500 text-white text-xs sm:text-sm rounded sm:rounded-lg hover:bg-red-600 transition-colors flex items-center justify-center"
-                          >
-                            <span className="sm:hidden text-xs">🗑️</span>
-                            <span className="hidden sm:inline">Ta bort</span>
-                          </button>
-                        </div>
-                      </div>
-                    ))
+                      )
+                    })
                   )}
                 </div>
               </div>
@@ -3162,24 +3407,11 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
                   </div>
                 </div>
 
-                <div className="flex flex-col sm:flex-row gap-2 sm:gap-3 mt-4 sm:mt-6">
-                  <button
-                    onClick={() => {
-                      if (isEditMode) {
-                        setIsEditMode(false)
-                        setNewCategoryForm({ name: '', emoji: '🍄' })
-                      } else {
-                        cancelAddCategory()
-                      }
-                    }}
-                    className="order-2 sm:order-1 flex-1 bg-gradient-to-r from-gray-500 to-gray-600 text-white py-2 sm:py-3 px-4 sm:px-6 rounded-lg sm:rounded-xl font-medium hover:from-gray-600 hover:to-gray-700 transition-all duration-200 shadow-lg text-sm sm:text-base"
-                  >
-                    {isEditMode ? 'Avbryt redigering' : 'Stäng'}
-                  </button>
+                <div className="flex mt-4 sm:mt-6">
                   <button
                     onClick={addNewCategory}
                     disabled={!newCategoryForm.name.trim()}
-                    className="order-1 sm:order-2 flex-1 bg-gradient-to-r from-green-500 to-green-600 text-white py-2 sm:py-3 px-4 sm:px-6 rounded-lg sm:rounded-xl font-medium hover:from-green-600 hover:to-green-700 transition-all duration-200 shadow-lg disabled:opacity-50 disabled:cursor-not-allowed text-sm sm:text-base"
+                    className="w-full bg-gradient-to-r from-green-500 to-green-600 text-white py-2 sm:py-3 px-4 sm:px-6 rounded-lg sm:rounded-xl font-medium hover:from-green-600 hover:to-green-700 transition-all duration-200 shadow-lg disabled:opacity-50 disabled:cursor-not-allowed text-sm sm:text-base"
                   >
                     {isEditMode ? 'Spara ändringar' : 'Lägg till kategori'}
                   </button>
