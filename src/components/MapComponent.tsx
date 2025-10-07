@@ -43,15 +43,17 @@ interface MapComponentProps {
 
 export default function MapComponent({ className = '' }: MapComponentProps) {
   const mapRef = useRef<any>(null)
+  const mapContainerRef = useRef<HTMLDivElement>(null)
+  const markersLayerRef = useRef<any>(null)
+  // Movement thresholds (tweak these to reduce false positives)
+  const MOVEMENT_THRESHOLD_METERS = 1.0 // require 1 meter by default
+  const SPEED_THRESHOLD_MS = 0.6 // require ~0.6 m/s (~2.16 km/h)
   // ...alla useState och useRef deklarationer...
 
   // Ref to track if user is manually panning the map (prevents auto-centering during navigation)
   const isUserPanning = useRef(false)
 
   // ...alla useState och useRef deklarationer...
-
-  const mapContainerRef = useRef<HTMLDivElement>(null)
-  const markersLayerRef = useRef<any>(null)
   const userArrowOverlayRef = useRef<SVGElement | null>(null)
   const [isMapLoaded, setIsMapLoaded] = useState(false)
   const [L, setL] = useState<any>(null)
@@ -450,6 +452,18 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
 
   // Store previous user location for heading calculation
   const prevUserLocation = useRef<{lat: number, lng: number} | null>(null);
+  // Track timestamp of last significant movement to debounce GPS jitter
+  const lastMovementTs = useRef<number | null>(null);
+  // Smoothed heading to reduce jitter when rotating arrow
+  const smoothedHeadingRef = useRef<number | null>(null);
+  // Movement streak counter: require multiple consecutive movement detections to confirm movement
+  const movementStreakRef = useRef<number>(0);
+  const lastMovementDetectionTs = useRef<number | null>(null);
+  // Track whether the map is currently being interacted with (zoom/pan) to avoid treating UI interactions as movement
+  const mapIsInteractingRef = useRef<boolean>(false);
+  // Timestamp of last map interaction end/start to provide a short buffer window
+  const mapLastInteractionTs = useRef<number | null>(null);
+  const MAP_INTERACTION_BUFFER_MS = 500; // treat updates within 500ms of interaction as part of interaction
 
   const updateUserMarker = (lat: number, lng: number) => {
     if (!mapRef.current || !L) return;
@@ -466,9 +480,45 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
     const prev = prevUserLocation.current;
     const distKm = prev ? calculateDistance(prev.lat, prev.lng, lat, lng) : 0;
     const distMeters = distKm * 1000;
-    if (prev && distMeters > 0.5) { // only compute heading if moved > 0.5m
-      heading = calculateHeading(prev.lat, prev.lng, lat, lng);
-      setUserHeading(heading);
+  // Consider a significant movement to avoid jitter. Use configured thresholds.
+  const movementThresholdMeters = MOVEMENT_THRESHOLD_METERS;
+  const speedThreshold = SPEED_THRESHOLD_MS;
+    // If the user is interacting with the map (zooming/panning), or we're within a short buffer after interaction,
+    // do not treat that as movement. This prevents quick GPS updates arriving right after zoom from triggering the arrow.
+    const nowTs = Date.now()
+    const lastInteraction = mapLastInteractionTs.current
+    const withinBuffer = lastInteraction !== null && (nowTs - lastInteraction <= MAP_INTERACTION_BUFFER_MS)
+    let isMovingByDistance = false
+    let isMovingBySpeed = false
+    if (!mapIsInteractingRef.current && !withinBuffer) {
+      const detectedByDistance = !!prev && distMeters >= movementThresholdMeters;
+      const detectedBySpeed = typeof userSpeed === 'number' && (userSpeed || 0) >= speedThreshold;
+
+      // If either test is true, increase streak; otherwise reset
+      if (detectedByDistance || detectedBySpeed) {
+        const lastDet = lastMovementDetectionTs.current || 0
+        // If detections are spaced too far apart, reset streak
+        if (nowTs - lastDet > 3000) {
+          movementStreakRef.current = 1
+        } else {
+          movementStreakRef.current = Math.min(5, movementStreakRef.current + 1)
+        }
+        lastMovementDetectionTs.current = nowTs
+
+        // Only confirm movement (and set heading) after 2 consecutive detections to reduce spikes
+        if (movementStreakRef.current >= 2) {
+          isMovingByDistance = detectedByDistance
+          isMovingBySpeed = detectedBySpeed
+          if (prev && distMeters >= 0.000001) {
+            heading = calculateHeading(prev.lat, prev.lng, lat, lng);
+            setUserHeading(heading);
+          }
+          lastMovementTs.current = nowTs;
+        }
+      } else {
+        movementStreakRef.current = 0
+        lastMovementDetectionTs.current = null
+      }
     }
     // Update prev location after computing distance/heading
     prevUserLocation.current = { lat, lng };
@@ -485,11 +535,18 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
   const arrowStroke = Math.max(1, Math.round(arrowSize / 12));
   // Use the freshly computed heading when available so the arrow shows immediately
   const displayHeading = (heading !== null) ? heading : userHeading
-  // Only show arrow when we have a heading and the user has moved more than 1 meter
-  const showArrow = displayHeading !== null && distMeters >= 1
+  // Only show arrow when we have a heading and we detected recent significant movement
+  // Show for a short window (2s) after movement to avoid flicker from small GPS jumps
+  const now = Date.now();
+  const showWindowMs = 3000;
+  const movedRecently = lastMovementTs.current !== null && (now - (lastMovementTs.current || 0) <= showWindowMs);
+  // Do not show arrow while user is interacting with the map
+  const showArrow = !mapIsInteractingRef.current && displayHeading !== null && movedRecently;
 
-    // Inline arrow removed from divIcon — overlay will draw the arrow
-    const userHtml = `
+    // When the arrow is shown we hide the dot (render a transparent placeholder div)
+    const userHtml = showArrow ?
+      `<div style="width:${dotTotal}px;height:${dotTotal}px;opacity:0;pointer-events:none"></div>` :
+      `
       <div style="position:relative;overflow:visible;width:${dotTotal}px;height:${dotTotal}px;display:flex;align-items:center;justify-content:center;">
         <div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:${dotSize + 2 * (whiteBorder + blackBorder)}px;height:${dotSize + 2 * (whiteBorder + blackBorder)}px;border-radius:50%;background:#000;"></div>
         <div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:${dotSize + 2 * whiteBorder}px;height:${dotSize + 2 * whiteBorder}px;border-radius:50%;background:#fff;"></div>
@@ -498,23 +555,34 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
     `;
     // Use dotTotal as the marker container (arrow is separate overlay)
     const totalSize = dotTotal;
-    const userLocationIcon = L.divIcon({
-      html: userHtml,
-      className: 'user-location-marker',
-      iconSize: [totalSize, totalSize],
-      iconAnchor: [totalSize/2, totalSize/2]
-    });
+    // Only add the divIcon marker when not showing the arrow. When showing the arrow,
+    // we want to remove the divIcon completely so the overlay arrow isn't occluded.
+    if (!showArrow) {
+      const userLocationIcon = L.divIcon({
+        html: userHtml,
+        className: 'user-location-marker',
+        iconSize: [totalSize, totalSize],
+        iconAnchor: [totalSize/2, totalSize/2]
+      });
 
-    L.marker([lat, lng], { icon: userLocationIcon }).addTo(mapRef.current);
+      L.marker([lat, lng], { icon: userLocationIcon }).addTo(mapRef.current);
+      // If an overlay exists (from previous movement), remove it so only the dot shows
+      if (userArrowOverlayRef.current && userArrowOverlayRef.current.parentNode) {
+        try { userArrowOverlayRef.current.parentNode.removeChild(userArrowOverlayRef.current) } catch (e) {}
+        userArrowOverlayRef.current = null
+      }
+    }
 
     // Also render a separate SVG overlay in the map overlayPane so the arrow is not clipped
     try {
       if (mapRef.current && mapRef.current.getPanes) {
         const panes = mapRef.current.getPanes()
-        const overlayPane = panes && panes.overlayPane
-        if (overlayPane) {
+  // Prefer markerPane so the overlay is above marker elements; fall back to overlayPane
+  const overlayPane = (panes && (panes.markerPane || panes.overlayPane))
+  if (overlayPane) {
           const point = mapRef.current.latLngToLayerPoint([lat, lng])
-          const overlaySize = arrowSize
+          // Make the overlay somewhat larger than the dot so the arrow is clearly visible
+          const overlaySize = Math.round(Math.max(arrowSize * 1.15, arrowSize + 6))
 
           if (showArrow) {
             // Create overlay if missing
@@ -528,22 +596,79 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
               svg.style.zIndex = '1500'
               overlayPane.appendChild(svg)
               userArrowOverlayRef.current = svg
+              // Attach reposition handler so the overlay follows the map when panning/zooming
+              try {
+                const reposition = () => {
+                  if (!mapRef.current || !userArrowOverlayRef.current) return;
+                  const p2 = mapRef.current.latLngToLayerPoint([lat, lng]);
+                  const s2 = overlaySize;
+                  userArrowOverlayRef.current.style.left = `${Math.round(p2.x - s2/2)}px`;
+                  userArrowOverlayRef.current.style.top = `${Math.round(p2.y - s2/2)}px`;
+                }
+                // store on element for later removal
+                (userArrowOverlayRef.current as any)._repositionFn = reposition
+                mapRef.current.on('move', reposition)
+                mapRef.current.on('zoom', reposition)
+                mapRef.current.on('resize', reposition)
+              } catch (e) {}
             }
 
-            // Update SVG content and position
+            // Update SVG content and position (use smoothed heading)
             const svgEl = userArrowOverlayRef.current as any
             if (svgEl) {
               svgEl.setAttribute('width', `${overlaySize}`)
               svgEl.setAttribute('height', `${overlaySize}`)
               svgEl.setAttribute('viewBox', '0 0 240 240')
+              // Center the overlay on the user dot
               svgEl.style.left = `${Math.round(point.x - overlaySize/2)}px`
               svgEl.style.top = `${Math.round(point.y - overlaySize/2)}px`
-              svgEl.innerHTML = `<polygon points="120,10 230,230 120,180 10,230" fill="rgba(37,99,235,0.96)" stroke="#0f172a" stroke-width="${arrowStroke}" stroke-linejoin="round" stroke-linecap="round" transform="rotate(${displayHeading},120,120)" />`
+              // Smooth heading using a small low-pass filter to reduce jitter
+              const rawHeading = typeof displayHeading === 'number' ? displayHeading : null
+              let useHeading = rawHeading
+              if (rawHeading !== null) {
+                const prevSm = smoothedHeadingRef.current
+                if (prevSm === null) {
+                  smoothedHeadingRef.current = rawHeading
+                  useHeading = rawHeading
+                } else {
+                  // Shortest angular difference
+                  let delta = ((rawHeading - prevSm + 540) % 360) - 180
+                  const alpha = 0.25 // smoothing factor (0..1), lower = smoother
+                  const newSm = (prevSm + delta * alpha + 360) % 360
+                  smoothedHeadingRef.current = newSm
+                  useHeading = newSm
+                }
+              }
+              // Render polygon without inline rotation; rotate the whole SVG element for smoother transforms
+              svgEl.innerHTML = `<polygon points="120,10 230,230 120,180 10,230" fill="rgba(37,99,235,0.96)" stroke="#0f172a" stroke-width="${Math.max(1, Math.round(overlaySize/48))}" stroke-linejoin="round" stroke-linecap="round" />`
+              if (useHeading !== null) {
+                svgEl.style.transformOrigin = '50% 50%'
+                svgEl.style.transform = `rotate(${useHeading}deg)`
+              }
             }
+            // Defensive: remove any leftover divIcon markers that might still exist
+            try {
+              mapRef.current.eachLayer((layer: any) => {
+                try {
+                  if (layer.options && layer.options.icon && layer.options.icon.options.className === 'user-location-marker') {
+                    mapRef.current.removeLayer(layer)
+                  }
+                } catch (e) {}
+              })
+            } catch (e) {}
           } else {
-            // Remove overlay if present
+            // Ensure overlay removed when not showing arrow
             if (userArrowOverlayRef.current && userArrowOverlayRef.current.parentNode) {
-              try { userArrowOverlayRef.current.parentNode.removeChild(userArrowOverlayRef.current) } catch(e) {}
+              try {
+                // remove map listeners attached to the overlay
+                const fn = (userArrowOverlayRef.current as any)._repositionFn
+                if (fn && mapRef.current) {
+                  try { mapRef.current.off('move', fn) } catch(e) {}
+                  try { mapRef.current.off('zoom', fn) } catch(e) {}
+                  try { mapRef.current.off('resize', fn) } catch(e) {}
+                }
+                userArrowOverlayRef.current.parentNode.removeChild(userArrowOverlayRef.current)
+              } catch(e) {}
               userArrowOverlayRef.current = null
             }
           }
@@ -985,18 +1110,51 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
     // Clear walking navigation
     if (showWalkingDirection) {
       hideWalkingDirection()
-    }
-    
-    // Clear car navigation  
-    if (showCarDirection) {
-      setShowCarDirection(false)
-      if (carDirectionLine && mapRef.current) {
-        mapRef.current.removeLayer(carDirectionLine)
-        setCarDirectionLine(null)
+    } else {
+      // Ensure any existing walking line is removed
+      if (walkingDirectionLine && mapRef.current) {
+        try { mapRef.current.removeLayer(walkingDirectionLine) } catch (e) {}
+        setWalkingDirectionLine(null)
       }
     }
-    
-    // Clear any pending navigation dialogs
+
+    // Clear car navigation
+    if (showCarDirection) {
+      setShowCarDirection(false)
+    }
+    if (carDirectionLine && mapRef.current) {
+      try { mapRef.current.removeLayer(carDirectionLine) } catch (e) {}
+      setCarDirectionLine(null)
+    }
+
+    // Remove any navigation polylines left on the map (className starting with modern-nav-line)
+    try {
+      if (mapRef.current && mapRef.current.eachLayer) {
+        mapRef.current.eachLayer((layer: any) => {
+          try {
+            const cls = layer.options && layer.options.className
+            if (cls && typeof cls === 'string' && cls.indexOf('modern-nav-line') === 0) {
+              mapRef.current.removeLayer(layer)
+            }
+          } catch (e) {
+            // ignore
+          }
+        })
+      }
+    } catch (e) {
+      // ignore
+    }
+
+    // Remove overlay arrow if present
+    if (userArrowOverlayRef.current && userArrowOverlayRef.current.parentNode) {
+      try { userArrowOverlayRef.current.parentNode.removeChild(userArrowOverlayRef.current) } catch (e) {}
+      userArrowOverlayRef.current = null
+    }
+
+    // Clear any distances and dialogs
+    setCurrentNavigationDistance(null)
+    setCurrentCarDistance(null)
+    setNavigationTarget(null)
     setShowNavigationDialog(false)
     setShowMapsConfirmation(false)
   }
@@ -1202,6 +1360,15 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
             zoomDelta: 0.5, // Smaller zoom steps
             wheelPxPerZoomLevel: 120 // Smoother mouse wheel zoom
           })
+          // Track map interaction state to avoid arrow activation during zoom/pan
+          try {
+            map.on('zoomstart', () => { mapIsInteractingRef.current = true; mapLastInteractionTs.current = Date.now(); })
+            map.on('movestart', () => { mapIsInteractingRef.current = true; mapLastInteractionTs.current = Date.now(); })
+            map.on('zoomend', () => { mapIsInteractingRef.current = false; mapLastInteractionTs.current = Date.now(); })
+            map.on('moveend', () => { mapIsInteractingRef.current = false; mapLastInteractionTs.current = Date.now(); })
+          } catch (e) {
+            // ignore
+          }
 
           // Add double-tap-and-hold zoom functionality for mobile
           let lastTapTime = 0
@@ -2040,9 +2207,9 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
     if (userLocation && mapRef.current) {
       console.log('Zooming to user location:', userLocation)
       // Zoom to current user location
+      // Jump instantly to user location (no animation) to avoid overlay jitter during animated map moves
       mapRef.current.setView([userLocation.lat, userLocation.lng], 16, {
-        animate: true,
-        duration: 1
+        animate: false
       })
       
       // Show popup on user marker
@@ -2787,7 +2954,7 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Svampart *
+                  Art *
                 </label>
                 <input
                   type="text"
