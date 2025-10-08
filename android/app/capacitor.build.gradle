@@ -7,13 +7,12 @@ android {
   }
 }
 
-def cordovaVariablesFile = file("../capacitor-cordova-android-plugins/cordova.variables.gradle")
-if (cordovaVariablesFile.exists()) {
+if (file("../capacitor-cordova-android-plugins/cordova.variables.gradle").exists()) {
     apply from: "../capacitor-cordova-android-plugins/cordova.variables.gradle"
 } else {
-    logger.warn("cordova.variables.gradle not found, skipping (expected in CI environments)")
+    logger.warn("cordova.variables.gradle not found, skipping apply")
+    ext.cdvPluginPostBuildExtras = []
 }
-
 dependencies {
     implementation project(':capacitor-geolocation')
 

@@ -51,19 +51,15 @@ dependencies {
 }
 
 // PLUGIN GRADLE EXTENSIONS START
-def cordovaVariablesFile = file("cordova.variables.gradle")
-if (cordovaVariablesFile.exists()) {
+if (file("cordova.variables.gradle").exists()) {
     apply from: "cordova.variables.gradle"
 } else {
-    logger.warn("cordova.variables.gradle not found, skipping (expected in CI environments)")
-    // Define defaults when file doesn't exist
+    logger.warn("cordova.variables.gradle not found, using defaults")
     ext.cdvPluginPostBuildExtras = []
     ext.cordovaConfig = [:]
 }
 // PLUGIN GRADLE EXTENSIONS END
 
-if (ext.has('cdvPluginPostBuildExtras')) {
-    for (def func : cdvPluginPostBuildExtras) {
-        func()
-    }
+for (def func : cdvPluginPostBuildExtras) {
+    func()
 }
