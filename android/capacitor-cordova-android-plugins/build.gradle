@@ -59,6 +59,14 @@ if (cordovaVars.exists()) {
 }
 // PLUGIN GRADLE EXTENSIONS END
 
+// Ensure plugin extension variables exist when the generated cordova.variables.gradle is missing
+if (!project.hasProperty('cdvPluginPostBuildExtras')) {
+    ext.cdvPluginPostBuildExtras = []
+}
+if (!project.hasProperty('cordovaConfig')) {
+    ext.cordovaConfig = [:]
+}
+
 for (def func : cdvPluginPostBuildExtras) {
     func()
 }
