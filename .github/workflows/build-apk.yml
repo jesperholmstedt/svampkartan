@@ -1,10 +1,10 @@
-name: Build and Release APK
+name: Build APK (minimal)
 
 on:
   workflow_dispatch: {}
 
 jobs:
-  build-and-release:
+  build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -23,29 +23,15 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
-      - name: Install Node dependencies
+      - name: Install dependencies
         run: npm ci
 
-      - name: Build web (Next.js)
+      - name: Build web
         run: npm run build
 
-      - name: Copy web build to Android assets
+      - name: Build Android APK
         run: |
-          rm -rf android/app/src/main/assets/public || true
-          mkdir -p android/app/src/main/assets/public
-          cp -r out/* android/app/src/main/assets/public/ || true
-
-      - name: Ensure Capacitor Android
-        run: |
-          npm install @capacitor/android --no-save || true
-          npx cap sync android || true
-
-      - name: Make gradlew executable
-        run: chmod +x android/gradlew
-
-      - name: Build APK
-        run: |
-          set -e
+          chmod +x android/gradlew
           cd android
           ./gradlew clean assembleDebug --no-daemon --refresh-dependencies
 
@@ -55,25 +41,6 @@ jobs:
           name: app-debug.apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
 
-      - name: Create GitHub release
-        id: create_release
-        uses: ncipollo/release-action@v1
-        with:
-          tag: apk-build-${{ github.run_id }}
-          name: APK build ${{ github.run_number }}
-          draft: false
-          prerelease: true
-
-      - name: Upload APK to Release
-        uses: softprops/action-upload-release-asset@v1
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: android/app/build/outputs/apk/debug/app-debug.apk
-          asset_name: app-debug.apk
-          asset_content_type: application/vnd.android.package-archive
-  workflow_dispatch: {}
-
-jobs:
   build-and-release:
     runs-on: ubuntu-latest
     steps:
