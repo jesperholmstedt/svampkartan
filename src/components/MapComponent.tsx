@@ -1961,7 +1961,7 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
   }
 
   // Backup and Restore Functions
-  const exportFinds = () => {
+  const exportFinds = async () => {
     const customCategories = categories.filter(cat => !DEFAULT_CATEGORIES.find(def => def.id === cat.id))
     const removedDefaults = DEFAULT_CATEGORIES.filter(def => !categories.find(cat => cat.id === def.id)).map(d => d.id)
     const backupData = {
@@ -1975,6 +1975,44 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
     }
     
     const dataStr = JSON.stringify(backupData, null, 2)
+    // If running as a Capacitor native app, use Filesystem + Share to save the file to Downloads
+    try {
+      // @ts-ignore
+      const isNative = typeof (window as any).Capacitor !== 'undefined' && (window as any).Capacitor.isNativePlatform && (window as any).Capacitor.isNativePlatform()
+      if (isNative) {
+        // Use dynamic imports so this code still builds for web
+        const { Filesystem, Directory } = await import('@capacitor/filesystem')
+        const { Share } = await import('@capacitor/share')
+
+        const fileName = `svampkartan-backup-${new Date().toISOString().split('T')[0]}.json`
+
+        // Write to temporary app data directory
+        await Filesystem.writeFile({
+          path: fileName,
+          data: dataStr,
+          directory: Directory.Cache,
+          encoding: 'utf8'
+        })
+
+        // Get a URI we can share (native path)
+        const uriResult = await Filesystem.getUri({ path: fileName, directory: Directory.Cache })
+
+        // Share the file so user can save it to Downloads or other location
+        await Share.share({
+          title: 'Min Svampkarta backup',
+          text: 'Säkerhetskopiera dina fynd',
+          url: uriResult.uri
+        })
+
+        setShowBackupDialog(false)
+        return
+      }
+    } catch (nativeErr) {
+      // If any native operation fails, fall back to browser download
+      console.warn('Native backup failed, falling back to web download', nativeErr)
+    }
+
+    // Web fallback: trigger anchor download
     const dataBlob = new Blob([dataStr], { type: 'application/json' })
     const url = URL.createObjectURL(dataBlob)
     
