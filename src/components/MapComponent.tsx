@@ -1981,8 +1981,30 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
       const isNative = typeof (window as any).Capacitor !== 'undefined' && (window as any).Capacitor.isNativePlatform && (window as any).Capacitor.isNativePlatform()
       if (isNative) {
         // Use dynamic imports so this code still builds for web
-        const { Filesystem, Directory } = await import('@capacitor/filesystem')
-        const { Share } = await import('@capacitor/share')
+        // Import using any-typed fallbacks to avoid TypeScript errors when types are not installed
+        let Filesystem: any = null
+        let Directory: any = null
+        let Share: any = null
+        try {
+          // @ts-expect-error - Dynamic import, module may not be available at compile time
+          const fsMod = await import('@capacitor/filesystem').catch(() => null)
+          if (fsMod) {
+            // support different module shapes
+            Filesystem = fsMod.Filesystem || fsMod.default?.Filesystem || fsMod
+            Directory = fsMod.Directory || fsMod.default?.Directory || fsMod.Directory
+          }
+          // @ts-expect-error - Dynamic import, module may not be available at compile time
+          const shareMod = await import('@capacitor/share').catch(() => null)
+          if (shareMod) {
+            Share = shareMod.Share || shareMod.default?.Share || shareMod
+          }
+        } catch (e) {
+          // ignore import errors and fall back to web download below
+        }
+
+        if (!Filesystem || !Share || !Directory) {
+          throw new Error('Capacitor Filesystem/Share not available')
+        }
 
         const fileName = `svampkartan-backup-${new Date().toISOString().split('T')[0]}.json`
 

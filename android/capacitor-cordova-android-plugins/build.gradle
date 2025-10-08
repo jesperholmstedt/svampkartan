@@ -28,8 +28,8 @@ android {
         abortOnError false
     }
     compileOptions {
-    sourceCompatibility JavaVersion.VERSION_17
-    targetCompatibility JavaVersion.VERSION_17
+        sourceCompatibility JavaVersion.VERSION_21
+        targetCompatibility JavaVersion.VERSION_21
     }
 }
 
@@ -51,21 +51,8 @@ dependencies {
 }
 
 // PLUGIN GRADLE EXTENSIONS START
-def cordovaVars = file("cordova.variables.gradle")
-if (cordovaVars.exists()) {
-    apply from: cordovaVars
-} else {
-    logger.warn("cordova.variables.gradle not found in capacitor-cordova-android-plugins; skipping apply.")
-}
+apply from: "cordova.variables.gradle"
 // PLUGIN GRADLE EXTENSIONS END
-
-// Ensure plugin extension variables exist when the generated cordova.variables.gradle is missing
-if (!project.hasProperty('cdvPluginPostBuildExtras')) {
-    ext.cdvPluginPostBuildExtras = []
-}
-if (!project.hasProperty('cordovaConfig')) {
-    ext.cordovaConfig = [:]
-}
 
 for (def func : cdvPluginPostBuildExtras) {
     func()

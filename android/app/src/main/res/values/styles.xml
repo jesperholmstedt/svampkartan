@@ -17,6 +17,7 @@
 
 
     <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
-        <item name="android:background">@drawable/splash</item>
+        <!-- Use champinjon drawable for splash background; place champinjon.png in res/drawable -->
+        <item name="android:background">@drawable/champinjon</item>
     </style>
 </resources>

@@ -2,20 +2,14 @@
 
 android {
   compileOptions {
-  sourceCompatibility JavaVersion.VERSION_17
-  targetCompatibility JavaVersion.VERSION_17
+      sourceCompatibility JavaVersion.VERSION_21
+      targetCompatibility JavaVersion.VERSION_21
   }
 }
 
-// Only apply cordova variables if the file exists (some CI setups may not have it)
-def cordovaVarsFile = file("../capacitor-cordova-android-plugins/cordova.variables.gradle")
-if (cordovaVarsFile.exists()) {
-  apply from: cordovaVarsFile
-} else {
-  logger.warn("cordova.variables.gradle not found at: ${cordovaVarsFile}. Skipping apply.")
-}
+apply from: "../capacitor-cordova-android-plugins/cordova.variables.gradle"
 dependencies {
-
+    implementation project(':capacitor-geolocation')
 
 }
 
