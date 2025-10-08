@@ -1,3 +1,42 @@
+name: Build APK and commit
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Build APK in Docker
+        run: |
+          echo "Running Android build inside Docker"
+          docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace thyrlian/android-sdk bash -c "cd android && ./gradlew assembleDebug"
+
+      - name: List built APKs
+        run: |
+          ls -la android/app/build/outputs/apk || true
+          ls -la android/app/build/outputs/apk/debug || true
+
+      - name: Commit APK back to repo
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if [ -f android/app/build/outputs/apk/debug/app-debug.apk ]; then
+            git add android/app/build/outputs/apk/debug/app-debug.apk
+            git commit -m "ci: add built APK (workflow_dispatch)" || echo "No changes to commit"
+            git push origin HEAD
+          else
+            echo "APK not found - nothing to commit"
+          fi
 
 
 on:
