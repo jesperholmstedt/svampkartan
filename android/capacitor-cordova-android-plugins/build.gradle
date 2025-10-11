@@ -57,6 +57,9 @@ if (cordovaVariablesFile.exists()) {
 }
 // PLUGIN GRADLE EXTENSIONS END
 
-for (def func : cdvPluginPostBuildExtras) {
-    func()
+// Guard for CI environment - cdvPluginPostBuildExtras might not be defined
+if (binding.hasVariable('cdvPluginPostBuildExtras')) {
+    for (def func : cdvPluginPostBuildExtras) {
+        func()
+    }
 }
