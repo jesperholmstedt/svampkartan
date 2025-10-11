@@ -7,7 +7,11 @@ android {
   }
 }
 
-apply from: "../capacitor-cordova-android-plugins/cordova.variables.gradle"
+// Guard for CI environment
+def cordovaVariablesFile = file("../capacitor-cordova-android-plugins/cordova.variables.gradle")
+if (cordovaVariablesFile.exists()) {
+    apply from: "../capacitor-cordova-android-plugins/cordova.variables.gradle"
+}
 dependencies {
     implementation project(':capacitor-geolocation')
 

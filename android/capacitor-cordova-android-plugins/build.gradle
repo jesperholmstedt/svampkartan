@@ -51,9 +51,15 @@ dependencies {
 }
 
 // PLUGIN GRADLE EXTENSIONS START
-apply from: "cordova.variables.gradle"
+def cordovaVariablesFile = file("cordova.variables.gradle")
+if (cordovaVariablesFile.exists()) {
+    apply from: "cordova.variables.gradle"
+}
 // PLUGIN GRADLE EXTENSIONS END
 
-for (def func : cdvPluginPostBuildExtras) {
-    func()
+// Guard for CI environment - cdvPluginPostBuildExtras might not be defined
+if (binding.hasVariable('cdvPluginPostBuildExtras')) {
+    for (def func : cdvPluginPostBuildExtras) {
+        func()
+    }
 }
