@@ -7,7 +7,12 @@ android {
   }
 }
 
-apply from: "../capacitor-cordova-android-plugins/cordova.variables.gradle"
+if (file("../capacitor-cordova-android-plugins/cordova.variables.gradle").exists()) {
+    apply from: "../capacitor-cordova-android-plugins/cordova.variables.gradle"
+} else {
+    logger.warn("cordova.variables.gradle not found, skipping")
+    ext.cdvPluginPostBuildExtras = []
+}
 dependencies {
     implementation project(':capacitor-geolocation')
 
