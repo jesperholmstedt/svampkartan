@@ -1,12 +1,5 @@
 import type { Metadata } from 'next'
-import { Poppins } from 'next/font/google'
 import './globals.css'
-
-const poppins = Poppins({ 
-  subsets: ['latin'],
-  weight: ['300', '400', '500', '600', '700'],
-  display: 'swap'
-})
 
 export const metadata: Metadata = {
   title: 'Min Svampkarta - Personal Mushroom Map',
@@ -55,9 +48,7 @@ export default function RootLayout({
           }}
         />
       </head>
-      <body className={`${poppins.className} overflow-hidden`}>
-        {children}
-      </body>
+      <body className="overflow-hidden font-sans">{children}</body>
     </html>
   )
 }
