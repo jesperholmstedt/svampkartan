@@ -2,12 +2,11 @@ apply plugin: 'com.android.application'
 
 android {
     namespace "com.jesper.svampkartan"
-    compileSdk 35
+    compileSdk rootProject.ext.compileSdkVersion
     defaultConfig {
         applicationId "com.jesper.svampkartan"
-    minSdkVersion 24
-    targetSdkVersion 35
-    buildToolsVersion "35.0.0"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
         versionName "1.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
@@ -16,10 +15,6 @@ android {
              // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
             ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
-    }
-    compileOptions {
-        sourceCompatibility JavaVersion.VERSION_17
-        targetCompatibility JavaVersion.VERSION_17
     }
     buildTypes {
         release {

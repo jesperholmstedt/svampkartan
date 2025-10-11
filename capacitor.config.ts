@@ -5,7 +5,10 @@ const config: CapacitorConfig = {
   appName: 'Svampkartan',
   webDir: 'out',
   server: {
-    androidScheme: 'capacitor'
+    androidScheme: 'https',
+    hostname: 'localhost',
+    iosScheme: 'capacitor',
+    url: undefined
   }
 };
 

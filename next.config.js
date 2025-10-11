@@ -1,5 +1,4 @@
 /** @type {import('next').NextConfig} */
-const repoName = 'svampkartan'; // Change if your repo name is different
 const nextConfig = {
   typescript: {
     ignoreBuildErrors: true,
@@ -11,8 +10,7 @@ const nextConfig = {
   trailingSlash: true,
   images: {
     unoptimized: true
-  },
-  // basePath and assetPrefix removed for local static export
+  }
 }
 
 module.exports = nextConfig
