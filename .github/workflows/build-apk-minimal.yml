@@ -53,5 +53,5 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: svampkartan-v${{ steps.version.outputs.version }}.apk
-          path: android/app/build/outputs/apk/debug/svampkartan.apk
+          name: svampkartan-v${{ steps.version.outputs.version }}-debug.apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
