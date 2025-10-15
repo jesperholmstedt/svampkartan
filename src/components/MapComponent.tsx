@@ -1962,6 +1962,7 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
 
   // Backup and Restore Functions
   const exportFinds = async () => {
+    console.log('exportFinds called')
     const customCategories = categories.filter(cat => !DEFAULT_CATEGORIES.find(def => def.id === cat.id))
     const removedDefaults = DEFAULT_CATEGORIES.filter(def => !categories.find(cat => cat.id === def.id)).map(d => d.id)
     const backupData = {
@@ -1975,30 +1976,35 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
     }
     
     const dataStr = JSON.stringify(backupData, null, 2)
+    console.log('Backup data prepared, length:', dataStr.length)
     // If running as a Capacitor native app, use Filesystem + Share to save the file to Downloads
     try {
       // @ts-ignore
       const isNative = typeof (window as any).Capacitor !== 'undefined' && (window as any).Capacitor.isNativePlatform && (window as any).Capacitor.isNativePlatform()
+      console.log('isNative:', isNative)
       if (isNative) {
+        console.log('Attempting native backup')
         // Use dynamic imports so this code still builds for web
         // Import using any-typed fallbacks to avoid TypeScript errors when types are not installed
         let Filesystem: any = null
         let Directory: any = null
         let Share: any = null
         try {
-          // @ts-expect-error - Dynamic import, module may not be available at compile time
+          console.log('Importing Capacitor plugins...')
           const fsMod = await import('@capacitor/filesystem').catch(() => null)
           if (fsMod) {
             // support different module shapes
             Filesystem = fsMod.Filesystem || fsMod.default?.Filesystem || fsMod
             Directory = fsMod.Directory || fsMod.default?.Directory || fsMod.Directory
           }
-          // @ts-expect-error - Dynamic import, module may not be available at compile time
+        
           const shareMod = await import('@capacitor/share').catch(() => null)
           if (shareMod) {
             Share = shareMod.Share || shareMod.default?.Share || shareMod
           }
+          console.log('Filesystem available:', !!Filesystem, 'Share available:', !!Share, 'Directory available:', !!Directory)
         } catch (e) {
+          console.error('Error importing plugins:', e)
           // ignore import errors and fall back to web download below
         }
 
@@ -2007,6 +2013,7 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
         }
 
         const fileName = `svampkartan-backup-${new Date().toISOString().split('T')[0]}.json`
+        console.log('Writing file:', fileName)
 
         // Write to temporary app data directory
         await Filesystem.writeFile({
@@ -2015,9 +2022,11 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
           directory: Directory.Cache,
           encoding: 'utf8'
         })
+        console.log('File written successfully')
 
         // Get a URI we can share (native path)
         const uriResult = await Filesystem.getUri({ path: fileName, directory: Directory.Cache })
+        console.log('URI obtained:', uriResult.uri)
 
         // Share the file so user can save it to Downloads or other location
         await Share.share({
@@ -2025,6 +2034,7 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
           text: 'Säkerhetskopiera dina fynd',
           url: uriResult.uri
         })
+        console.log('File shared successfully')
 
         setShowBackupDialog(false)
         return
@@ -2034,6 +2044,7 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
       console.warn('Native backup failed, falling back to web download', nativeErr)
     }
 
+    console.log('Using web fallback download')
     // Web fallback: trigger anchor download
     const dataBlob = new Blob([dataStr], { type: 'application/json' })
     const url = URL.createObjectURL(dataBlob)
