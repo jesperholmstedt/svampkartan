@@ -37,14 +37,14 @@ jobs:
           chmod +x android/gradlew
           cd android
           
-          # Create consistent debug keystore for all builds BEFORE Gradle build
-          keytool -genkeypair -v -keystore app/debug.keystore -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Android Debug,O=Android,C=US" -noprompt
+          # Create upload keystore for consistent signing
+          keytool -genkeypair -v -keystore upload.keystore -alias upload -keyalg RSA -keysize 2048 -validity 10000 -storepass uploadpass -keypass uploadpass -dname "CN=Upload,O=Android,C=US" -noprompt
           
-          # Configure Gradle to use the debug keystore
+          # Configure Gradle to use the upload keystore for release builds
           echo "android.useAndroidX=true" > gradle.properties
           echo "android.enableJetifier=true" >> gradle.properties
           
-          ./gradlew clean assembleDebug --no-daemon --refresh-dependencies
+          ./gradlew clean assembleRelease --no-daemon --refresh-dependencies
 
       - name: Get version
         id: version
@@ -53,5 +53,5 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: svampkartan-v${{ steps.version.outputs.version }}-debug.apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          name: svampkartan-v${{ steps.version.outputs.version }}-release.apk
+          path: android/app/build/outputs/apk/release/app-release.apk
