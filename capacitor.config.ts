@@ -9,4 +9,6 @@ const config: CapacitorConfig = {
   }
 };
 
+// Force resync after icon changes
+
 export default config;
