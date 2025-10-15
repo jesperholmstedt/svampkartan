@@ -36,6 +36,16 @@ jobs:
         run: |
           chmod +x android/gradlew
           cd android
+          
+          # Create consistent debug keystore for all builds
+          keytool -genkeypair -v -keystore debug.keystore -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Android Debug,O=Android,C=US" -noprompt
+          
+          # Configure Gradle to use the debug keystore
+          echo "android.injected.signing.store.file=debug.keystore" > gradle.properties
+          echo "android.injected.signing.store.password=android" >> gradle.properties
+          echo "android.injected.signing.key.alias=androiddebugkey" >> gradle.properties
+          echo "android.injected.signing.key.password=android" >> gradle.properties
+          
           ./gradlew clean assembleDebug --no-daemon --refresh-dependencies
 
       - name: Get version
@@ -46,4 +56,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: svampkartan-v${{ steps.version.outputs.version }}.apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: android/app/build/outputs/apk/debug/svampkartan.apk
