@@ -314,7 +314,27 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
   const requestLocation = async () => {
     setLocationStatus('locating');
     try {
+      if (isNative) {
+        // Native/Capacitor: Request permissions first
+        console.log('Requesting location permissions...');
+        const permission = await Geolocation.requestPermissions();
+        console.log('Permission result:', permission);
+
+        if (permission.location !== 'granted') {
+          throw new Error('Location permission denied');
+        }
+      }
+
       if (!isNative && typeof navigator !== 'undefined' && 'geolocation' in navigator) {
+        // Web: Check permissions if available
+        if (navigator.permissions) {
+          const permission = await navigator.permissions.query({ name: 'geolocation' });
+          console.log('Web permission status:', permission.state);
+          if (permission.state === 'denied') {
+            throw new Error('Location permission denied');
+          }
+        }
+
         navigator.geolocation.getCurrentPosition(
           (position) => {
             const { latitude, longitude, accuracy } = position.coords;
@@ -339,15 +359,24 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
             console.log('Geolocation error (web):', error.message);
             handleLocationError(error);
           },
-          { enableHighAccuracy: true }
+          {
+            enableHighAccuracy: true,
+            timeout: 15000, // 15 seconds timeout
+            maximumAge: 60000 // Accept positions up to 1 minute old
+          }
         );
       } else {
-        await Geolocation.requestPermissions();
-        const position = await Geolocation.getCurrentPosition({ enableHighAccuracy: true });
+        // Native/Capacitor
+        console.log('Getting current position (native)...');
+        const position = await Geolocation.getCurrentPosition({
+          enableHighAccuracy: true,
+          timeout: 15000 // 15 seconds timeout
+        });
         const { latitude, longitude, accuracy } = position.coords;
         console.log('Got precise location (native):', latitude, longitude, 'accuracy:', accuracy);
         setUserLocation({ lat: latitude, lng: longitude });
         setLocationStatus('found');
+        setUserSpeed(position.coords.speed ?? null);
         updateUserMarker(latitude, longitude);
         if (mapRef.current) {
           mapRef.current.setView([latitude, longitude], 15, {
@@ -380,11 +409,18 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
           (error) => {
             console.log('watchPosition error (web):', error);
           },
-          { enableHighAccuracy: true }
+          {
+            enableHighAccuracy: true,
+            timeout: 15000,
+            maximumAge: 30000
+          }
         );
         setWatchId(id);
       } else {
-        Geolocation.watchPosition({ enableHighAccuracy: true }, (position, error) => {
+        Geolocation.watchPosition({
+          enableHighAccuracy: true,
+          timeout: 15000
+        }, (position, error) => {
           if (position) {
             const { latitude, longitude, accuracy } = position.coords;
             console.log('Location update (native):', latitude, longitude, 'accuracy:', accuracy);
