@@ -1,6 +1,6 @@
 {
   "name": "svampkartan",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "Interactive mushroom mapping application for Sweden",
   "private": true,
   "scripts": {

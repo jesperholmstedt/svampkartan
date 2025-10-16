@@ -37,8 +37,8 @@ jobs:
           chmod +x android/gradlew
           cd android
           
-          # Create upload keystore for consistent signing
-          keytool -genkeypair -v -keystore upload.keystore -alias upload -keyalg RSA -keysize 2048 -validity 10000 -storepass uploadpass -keypass uploadpass -dname "CN=Upload,O=Android,C=US" -noprompt
+          # Upload keystore should already exist in repo for consistent signing
+          # keytool -genkeypair -v -keystore upload.keystore -alias upload -keyalg RSA -keysize 2048 -validity 10000 -storepass uploadpass -keypass uploadpass -dname "CN=Upload,O=Android,C=US" -noprompt
           
           # Configure Gradle to use the upload keystore for release builds
           echo "android.useAndroidX=true" > gradle.properties
