@@ -43,6 +43,8 @@ jobs:
           # Configure Gradle to use the upload keystore for release builds
           echo "android.useAndroidX=true" > gradle.properties
           echo "android.enableJetifier=true" >> gradle.properties
+          echo "org.gradle.jvmargs=-Xmx6144m -Dfile.encoding=UTF-8" >> gradle.properties
+          echo "org.gradle.daemon=true" >> gradle.properties
           
           ./gradlew clean assembleRelease --no-daemon --refresh-dependencies
 
