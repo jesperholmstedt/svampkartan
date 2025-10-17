@@ -30,11 +30,11 @@ interface MushroomMarker {
 
 // Available mushroom categories
 const DEFAULT_CATEGORIES = [
-  { id: 'unknown', name: 'Okända', emoji: '❓', color: 'gray' },
-  { id: 'edible', name: 'Ätliga', emoji: '🍄', color: 'green' },
+  { id: 'unknown', name: 'Allmänt', emoji: '⭐', color: 'gray' },
+  { id: 'mushroom', name: 'Svamp', emoji: '🍄', color: 'green' },
   { id: 'poisonous', name: 'Giftiga', emoji: '☠️', color: 'red' },
-  { id: 'rare', name: 'Sällsynta', emoji: '💎', color: 'purple' },
-  { id: 'common', name: 'Vanliga', emoji: '🌳', color: 'brown' },
+  { id: 'berries', name: 'Bär', emoji: '🍓', color: 'purple' },
+  { id: 'common', name: 'Vanliga', emoji: '🍄‍🟫', color: 'brown' },
 ] as const
 
 interface MapComponentProps {
@@ -2131,8 +2131,17 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
             ...marker,
             category: marker.category || 'edible' // Default to 'edible' if category is missing
           }))
-          setMarkers(markersWithCategories)
-          localStorage.setItem('svampkartan-markers', JSON.stringify(markersWithCategories))
+          
+          // Merge with existing markers - only add new ones, don't replace existing
+          setMarkers(currentMarkers => {
+            const existingIds = new Set(currentMarkers.map(m => `${m.lat}-${m.lng}-${m.name}`))
+            const newMarkers = markersWithCategories.filter((marker: any) => 
+              !existingIds.has(`${marker.lat}-${marker.lng}-${marker.name}`)
+            )
+            const mergedMarkers = [...currentMarkers, ...newMarkers]
+            localStorage.setItem('svampkartan-markers', JSON.stringify(mergedMarkers))
+            return mergedMarkers
+          })
           
           // Restore car location if exists
           if (backupData.carLocation) {
@@ -2140,21 +2149,32 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
             localStorage.setItem('svampkartan-car-location', JSON.stringify(backupData.carLocation))
           }
           
-          // Restore custom categories if exists
+          // Restore custom categories if exists - merge, don't replace
           if (backupData.customCategories) {
-            const removed = backupData.removedDefaults || []
-            const base = DEFAULT_CATEGORIES.filter((def: any) => !removed.includes(def.id))
-            const restoredCategories = [...base]
-            backupData.customCategories.forEach((c: any) => {
-              const idx = restoredCategories.findIndex((x: any) => x.id === c.id)
-              if (idx >= 0) restoredCategories[idx] = c
-              else restoredCategories.push(c)
+            setCategories(currentCategories => {
+              const removed = backupData.removedDefaults || []
+              const base = DEFAULT_CATEGORIES.filter((def: any) => !removed.includes(def.id))
+              const mergedCategories = [...currentCategories]
+              
+              // Add new categories that don't already exist
+              backupData.customCategories.forEach((c: any) => {
+                const existingIdx = mergedCategories.findIndex((x: any) => x.id === c.id)
+                if (existingIdx >= 0) {
+                  // Update existing category
+                  mergedCategories[existingIdx] = c
+                } else {
+                  // Add new category
+                  mergedCategories.push(c)
+                }
+              })
+              
+              saveCategoriesToStorage(mergedCategories)
+              return mergedCategories
             })
-            setCategories(restoredCategories)
-            saveCategoriesToStorage(restoredCategories)
           }
           
-          alert(`✅ Backup återställd! ${backupData.markers.length} fynd importerade.`)
+          const importedCount = markersWithCategories.length
+          alert(`✅ Backup sammanfogad! ${importedCount} fynd från backup (nya fynd lades till, befintliga behölls).`)
           setShowBackupDialog(false)
         } else {
           console.error('Invalid backup format, parsed object:', backupData)
