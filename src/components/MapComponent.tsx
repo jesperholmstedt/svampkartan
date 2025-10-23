@@ -1667,105 +1667,292 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
 
     // Filtrera markers som ska visas på kartan baserat på valda kategorier
     // Men se till att den marker som användaren har valt från listan alltid inkluderas
-  const filteredMarkers = markers.filter(marker => visibleCategoryIds.includes(marker.category) || (selectedMarkerId !== null && marker.id === selectedMarkerId))
+    const filteredMarkers = markers.filter(marker => visibleCategoryIds.includes(marker.category) || (selectedMarkerId !== null && marker.id === selectedMarkerId))
 
-    // Add markers to map
-    filteredMarkers.forEach(marker => {
-      // Hide other mushrooms during walking navigation, only show target
-      if (showWalkingDirection && navigationTarget && marker.id !== navigationTarget.id) {
-        return // Skip rendering this marker
-      }
-      
-      const sizes = getZoomBasedSizes(mapZoom)
-      const categoryColors = getCategoryColors(marker.category || 'edible')
-      
-      // Modern SVG mushroom pin marker
-      const green = '#10b981';
-      const mushroomIcon = L.divIcon({
-        html: `
-          <style>
-            .mushroom-marker-modern {
-              display: flex;
-              flex-direction: column;
-              align-items: center;
-              cursor: pointer;
-              transition: transform 0.2s cubic-bezier(.4,0,.2,1);
-            }
-            .mushroom-marker-modern:hover {
-              transform: scale(1.08) translateY(-6px);
-              filter: drop-shadow(0 8px 24px rgba(0,0,0,0.18));
-            }
-          </style>
-            <div class="mushroom-marker-modern" style="height:44px;width:18px;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;">
-              <div style="
-                background: rgba(0,0,0,0.82);
-                border: none;
-                border-radius: 5px;
-                padding: 1.5px 10px 4px 10px;
-                font-size: 11px;
-                font-weight: 400;
-                color: #fff;
-                box-shadow: 0 4px 16px rgba(16,185,129,0.10), 0 1.5px 6px rgba(0,0,0,0.10);
-                font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
-                text-align: center;
-                letter-spacing: -0.2px;
-                text-shadow: none;
-                max-width: 120px;
-                overflow: visible;
-                white-space: nowrap;
-                text-overflow: ellipsis;
-                margin-bottom: 2px;
+    // Clustering configuration
+    const CLUSTER_MIN_COUNT = 50 // Start clustering when >= 50 markers visible
+    const DISABLE_CLUSTER_ZOOM = 15 // Disable clustering when zoomed in beyond this level
+    const shouldCluster = (filteredMarkers.length >= CLUSTER_MIN_COUNT || mapZoom <= 10) && mapZoom < DISABLE_CLUSTER_ZOOM
+
+    if (!shouldCluster) {
+      // Render individual markers when count is low or zoomed in
+      filteredMarkers.forEach(marker => {
+        // Hide other mushrooms during walking navigation, only show target
+        if (showWalkingDirection && navigationTarget && marker.id !== navigationTarget.id) {
+          return // Skip rendering this marker
+        }
+        
+        const sizes = getZoomBasedSizes(mapZoom)
+        const categoryColors = getCategoryColors(marker.category || 'edible')
+        
+        // Modern SVG mushroom pin marker
+        const green = '#10b981';
+        const mushroomIcon = L.divIcon({
+          html: `
+            <style>
+              .mushroom-marker-modern {
                 display: flex;
                 flex-direction: column;
                 align-items: center;
-                justify-content: center;
-                gap: 2px;
-                filter: drop-shadow(0 2px 6px rgba(16,185,129,0.08));
-              ">
-                <span style="display:inline-block;vertical-align:middle;">
-                  ${(categories.find(cat => cat.id === marker.category)?.emoji || '❓')} ${marker.name}
-                </span>
-                <span style="display:flex;flex-direction:row;align-items:center;gap:2px;margin-top:2px;">
-                  ${Array.from({length: 5}, (_, i) => `
-                    <span style="
-                      width: 6px;
-                      height: 6px;
-                      border-radius: 50%;
-                      background: ${i < (marker.abundance || 3) 
-                        ? green 
-                        : '#e5e7eb'};
-                      box-shadow: ${i < (marker.abundance || 3) 
-                        ? '0 1px 2px rgba(16, 185, 129, 0.3), inset 0 1px 1px rgba(255,255,255,0.2)' 
-                        : '0 1px 1px rgba(0,0,0,0.08), inset 0 1px 1px rgba(255,255,255,0.7)'};
-                      border: 1px solid #fff;
-                      display: inline-block;
-                    "></span>
-                  `).join('')}
-                </span>
+                cursor: pointer;
+                transition: transform 0.2s cubic-bezier(.4,0,.2,1);
+              }
+              .mushroom-marker-modern:hover {
+                transform: scale(1.08) translateY(-6px);
+                filter: drop-shadow(0 8px 24px rgba(0,0,0,0.18));
+              }
+            </style>
+              <div class="mushroom-marker-modern" style="height:44px;width:18px;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;">
+                <div style="
+                  background: rgba(0,0,0,0.82);
+                  border: none;
+                  border-radius: 5px;
+                  padding: 1.5px 10px 4px 10px;
+                  font-size: 11px;
+                  font-weight: 400;
+                  color: #fff;
+                  box-shadow: 0 4px 16px rgba(16,185,129,0.10), 0 1.5px 6px rgba(0,0,0,0.10);
+                  font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
+                  text-align: center;
+                  letter-spacing: -0.2px;
+                  text-shadow: none;
+                  max-width: 120px;
+                  overflow: visible;
+                  white-space: nowrap;
+                  text-overflow: ellipsis;
+                  margin-bottom: 2px;
+                  display: flex;
+                  flex-direction: column;
+                  align-items: center;
+                  justify-content: center;
+                  gap: 2px;
+                  filter: drop-shadow(0 2px 6px rgba(16,185,129,0.08));
+                ">
+                  <span style="display:inline-block;vertical-align:middle;">
+                    ${(categories.find(cat => cat.id === marker.category)?.emoji || '❓')} ${marker.name}
+                  </span>
+                  <span style="display:flex;flex-direction:row;align-items:center;gap:2px;margin-top:2px;">
+                    ${Array.from({length: 5}, (_, i) => `
+                      <span style="
+                        width: 6px;
+                        height: 6px;
+                        border-radius: 50%;
+                        background: ${i < (marker.abundance || 3) 
+                          ? green 
+                          : '#e5e7eb'};
+                        box-shadow: ${i < (marker.abundance || 3) 
+                          ? '0 1px 2px rgba(16, 185, 129, 0.3), inset 0 1px 1px rgba(255,255,255,0.2)' 
+                          : '0 1px 1px rgba(0,0,0,0.08), inset 0 1px 1px rgba(255,255,255,0.7)'};
+                        border: 1px solid #fff;
+                        display: inline-block;
+                      "></span>
+                    `).join('')}
+                  </span>
+                </div>
+              <svg width="18" height="12" viewBox="0 0 18 12" fill="none" xmlns="http://www.w3.org/2000/svg" style="margin-top: 0;">
+                <polygon points="9,12 0,0 18,0" fill="#dc2626" stroke="#991b1b" stroke-width="1.5"/>
+              </svg>
+            </div>
+          `,
+          className: 'mushroom-icon-modern',
+          iconSize: [18, 44],
+          iconAnchor: [9, 44]
+        })
+        
+        const leafletMarker = L.marker([marker.lat, marker.lng], { icon: mushroomIcon })
+        
+        // Add click handler to open marker details with navigation options
+        leafletMarker.on('click', () => {
+          // Clicking the marker on the map should cancel any existing navigation
+          // (walking or car) and open the details modal for the clicked marker.
+          clearExistingNavigation()
+          setSelectedMarker(marker)
+          setShowMarkerDetails(true)
+        })
+        
+        markersLayerRef.current?.addLayer(leafletMarker)
+      })
+    } else {
+      // Clustering mode: group nearby markers
+      const gridSize = Math.max(40, Math.round(60 * (11 / Math.max(1, mapZoom)))) // Grid size increases when zoomed out
+      const clusters: Record<string, { 
+        count: number; 
+        latSum: number; 
+        lngSum: number; 
+        markers: MushroomMarker[] 
+      }> = {}
+
+      // Group markers into grid cells
+      filteredMarkers.forEach(marker => {
+        if (showWalkingDirection && navigationTarget && marker.id !== navigationTarget.id) {
+          return // Skip during navigation
+        }
+
+        try {
+          const point = mapRef.current.latLngToLayerPoint([marker.lat, marker.lng])
+          const gridKey = `${Math.floor(point.x / gridSize)}:${Math.floor(point.y / gridSize)}`
+          
+          if (!clusters[gridKey]) {
+            clusters[gridKey] = { count: 0, latSum: 0, lngSum: 0, markers: [] }
+          }
+          
+          clusters[gridKey].count++
+          clusters[gridKey].latSum += marker.lat
+          clusters[gridKey].lngSum += marker.lng
+          clusters[gridKey].markers.push(marker)
+        } catch (e) {
+          // Fallback: render individual marker if projection fails
+          const fallbackIcon = L.divIcon({
+            html: `<div style="background:#ef4444;width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-size:14px;box-shadow:0 2px 8px rgba(0,0,0,0.2);">🍄</div>`,
+            className: 'mushroom-fallback',
+            iconSize: [28, 28],
+            iconAnchor: [14, 14]
+          })
+          const fallbackMarker = L.marker([marker.lat, marker.lng], { icon: fallbackIcon })
+          fallbackMarker.on('click', () => {
+            clearExistingNavigation()
+            setSelectedMarker(marker)
+            setShowMarkerDetails(true)
+          })
+          markersLayerRef.current?.addLayer(fallbackMarker)
+        }
+      })
+
+      // Render clusters or individual markers
+      Object.values(clusters).forEach(cluster => {
+        if (cluster.count === 1) {
+          // Single marker: render with full styling like non-clustered mode
+          const marker = cluster.markers[0]
+          const green = '#10b981'
+          const singleIcon = L.divIcon({
+            html: `
+              <style>
+                .mushroom-marker-modern {
+                  display: flex;
+                  flex-direction: column;
+                  align-items: center;
+                  cursor: pointer;
+                  transition: transform 0.2s cubic-bezier(.4,0,.2,1);
+                }
+                .mushroom-marker-modern:hover {
+                  transform: scale(1.08) translateY(-6px);
+                  filter: drop-shadow(0 8px 24px rgba(0,0,0,0.18));
+                }
+              </style>
+                <div class="mushroom-marker-modern" style="height:44px;width:18px;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;">
+                  <div style="
+                    background: rgba(0,0,0,0.82);
+                    border: none;
+                    border-radius: 5px;
+                    padding: 1.5px 10px 4px 10px;
+                    font-size: 11px;
+                    font-weight: 400;
+                    color: #fff;
+                    box-shadow: 0 4px 16px rgba(16,185,129,0.10), 0 1.5px 6px rgba(0,0,0,0.10);
+                    font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
+                    text-align: center;
+                    letter-spacing: -0.2px;
+                    text-shadow: none;
+                    max-width: 120px;
+                    overflow: visible;
+                    white-space: nowrap;
+                    text-overflow: ellipsis;
+                    margin-bottom: 2px;
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    justify-content: center;
+                    gap: 2px;
+                    filter: drop-shadow(0 2px 6px rgba(16,185,129,0.08));
+                  ">
+                    <span style="display:inline-block;vertical-align:middle;">
+                      ${(categories.find(cat => cat.id === marker.category)?.emoji || '❓')} ${marker.name}
+                    </span>
+                    <span style="display:flex;flex-direction:row;align-items:center;gap:2px;margin-top:2px;">
+                      ${Array.from({length: 5}, (_, i) => `
+                        <span style="
+                          width: 6px;
+                          height: 6px;
+                          border-radius: 50%;
+                          background: ${i < (marker.abundance || 3) 
+                            ? green 
+                            : '#e5e7eb'};
+                          box-shadow: ${i < (marker.abundance || 3) 
+                            ? '0 1px 2px rgba(16, 185, 129, 0.3), inset 0 1px 1px rgba(255,255,255,0.2)' 
+                            : '0 1px 1px rgba(0,0,0,0.08), inset 0 1px 1px rgba(255,255,255,0.7)'};
+                          border: 1px solid #fff;
+                          display: inline-block;
+                        "></span>
+                      `).join('')}
+                    </span>
+                  </div>
+                <svg width="18" height="12" viewBox="0 0 18 12" fill="none" xmlns="http://www.w3.org/2000/svg" style="margin-top: 0;">
+                  <polygon points="9,12 0,0 18,0" fill="#dc2626" stroke="#991b1b" stroke-width="1.5"/>
+                </svg>
               </div>
-            <svg width="18" height="12" viewBox="0 0 18 12" fill="none" xmlns="http://www.w3.org/2000/svg" style="margin-top: 0;">
-              <polygon points="9,12 0,0 18,0" fill="#dc2626" stroke="#991b1b" stroke-width="1.5"/>
-            </svg>
-          </div>
-        `,
-        className: 'mushroom-icon-modern',
-        iconSize: [18, 44],
-        iconAnchor: [9, 44]
+            `,
+            className: 'mushroom-icon-modern',
+            iconSize: [18, 44],
+            iconAnchor: [9, 44]
+          })
+          const singleMarker = L.marker([marker.lat, marker.lng], { icon: singleIcon })
+          singleMarker.on('click', () => {
+            clearExistingNavigation()
+            setSelectedMarker(marker)
+            setShowMarkerDetails(true)
+          })
+          markersLayerRef.current?.addLayer(singleMarker)
+        } else {
+          // Multiple markers: render as cluster
+          const avgLat = cluster.latSum / cluster.count
+          const avgLng = cluster.lngSum / cluster.count
+          const count = cluster.count
+
+          const clusterIcon = L.divIcon({
+            html: `
+              <div style="
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                width: 44px;
+                height: 44px;
+                border-radius: 50%;
+                background: linear-gradient(135deg, rgba(59, 130, 246, 0.95) 0%, rgba(37, 99, 235, 0.95) 100%);
+                color: #fff;
+                font-weight: 700;
+                font-size: 14px;
+                border: 3px solid rgba(255, 255, 255, 0.9);
+                box-shadow: 0 4px 12px rgba(37, 99, 235, 0.4), 0 2px 6px rgba(0, 0, 0, 0.2);
+                cursor: pointer;
+                transition: transform 0.2s ease;
+              " class="cluster-marker">
+                ${count}
+              </div>
+              <style>
+                .cluster-marker:hover {
+                  transform: scale(1.1);
+                }
+              </style>
+            `,
+            className: 'mushroom-cluster',
+            iconSize: [44, 44],
+            iconAnchor: [22, 22]
+          })
+
+          const clusterMarker = L.marker([avgLat, avgLng], { icon: clusterIcon })
+          clusterMarker.on('click', () => {
+            // Zoom to show all markers in this cluster
+            if (cluster.markers.length === 1) {
+              mapRef.current.setView([avgLat, avgLng], Math.min(18, mapZoom + 3), { animate: true })
+            } else {
+              const bounds = L.latLngBounds(cluster.markers.map(m => [m.lat, m.lng]))
+              mapRef.current.fitBounds(bounds.pad(0.2), { animate: true, maxZoom: 17 })
+            }
+          })
+          markersLayerRef.current?.addLayer(clusterMarker)
+        }
       })
-      
-      const leafletMarker = L.marker([marker.lat, marker.lng], { icon: mushroomIcon })
-      
-      // Add click handler to open marker details with navigation options
-      leafletMarker.on('click', () => {
-        // Clicking the marker on the map should cancel any existing navigation
-        // (walking or car) and open the details modal for the clicked marker.
-        clearExistingNavigation()
-        setSelectedMarker(marker)
-        setShowMarkerDetails(true)
-      })
-      
-      markersLayerRef.current?.addLayer(leafletMarker)
-    })
+    }
   // Depend on stable primitives (strings/ids/lengths) rather than raw objects/arrays which may change shape
   }, [markers, L, mapZoom, visibleCategoryIdsKey, showWalkingDirection, navigationTargetId, categories.length, selectedMarkerId])
 
