@@ -46,8 +46,8 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
   const mapContainerRef = useRef<HTMLDivElement>(null)
   const markersLayerRef = useRef<any>(null)
   // Movement thresholds (tweak these to reduce false positives)
-  const MOVEMENT_THRESHOLD_METERS = 1.0 // require 1 meter by default
-  const SPEED_THRESHOLD_MS = 0.6 // require ~0.6 m/s (~2.16 km/h)
+  const MOVEMENT_THRESHOLD_METERS = 0.3 // require 0.3 meter (mycket känsligare)
+  const SPEED_THRESHOLD_MS = 0.1 // require ~0.1 m/s (~0.36 km/h) (mycket känsligare)
   // ...alla useState och useRef deklarationer...
 
   // Ref to track if user is manually panning the map (prevents auto-centering during navigation)
@@ -361,8 +361,8 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
           },
           {
             enableHighAccuracy: true,
-            timeout: 15000, // 15 seconds timeout
-            maximumAge: 60000 // Accept positions up to 1 minute old
+            timeout: 10000,    // 10 sekunder timeout för initial position
+            maximumAge: 5000   // Accept positions up to 5 seconds old
           }
         );
       } else {
@@ -370,7 +370,7 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
         console.log('Getting current position (native)...');
         const position = await Geolocation.getCurrentPosition({
           enableHighAccuracy: true,
-          timeout: 15000 // 15 seconds timeout
+          timeout: 10000 // 10 sekunder timeout för initial position
         });
         const { latitude, longitude, accuracy } = position.coords;
         console.log('Got precise location (native):', latitude, longitude, 'accuracy:', accuracy);
@@ -411,15 +411,15 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
           },
           {
             enableHighAccuracy: true,
-            timeout: 15000,
-            maximumAge: 30000
+            timeout: 5000,     // Minska timeout till 5 sekunder
+            maximumAge: 1000   // Acceptera bara positioner max 1 sekund gamla
           }
         );
         setWatchId(id);
       } else {
         Geolocation.watchPosition({
           enableHighAccuracy: true,
-          timeout: 15000
+          timeout: 5000       // Minska timeout till 5 sekunder för snabbare uppdateringar
         }, (position, error) => {
           if (position) {
             const { latitude, longitude, accuracy } = position.coords;
