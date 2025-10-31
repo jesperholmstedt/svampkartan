@@ -1000,25 +1000,85 @@ ${measurePoints.map((p, idx) => `      <trkpt lat="${p.lat}" lon="${p.lng}">
         const nameElement = gpxDoc.querySelector('trk > name')
         const routeName = nameElement?.textContent || 'Importerad rutt'
 
-        // Clear existing measurement and load imported route
+        // Clear existing measurement
         clearMeasureElements()
-        setMeasurePoints([])
+        
+        // Set all points at once
+        setMeasurePoints(points)
         setMeasureRouteName(routeName)
         setIsMeasuring(true)
 
-        // Add each point
-        points.forEach(point => {
-          addMeasurePoint(point.lat, point.lng)
-        })
+        // Calculate total distance
+        let totalDistance = 0
+        if (points.length >= 2) {
+          for (let i = 1; i < points.length; i++) {
+            totalDistance += calculateDistance(
+              points[i - 1].lat,
+              points[i - 1].lng,
+              points[i].lat,
+              points[i].lng
+            )
+          }
+        }
+        setTotalMeasureDistance(totalDistance)
 
-        // Show success message
-        alert(`GPX-fil importerad: ${routeName}\n${points.length} punkter, ${formatDistance(totalMeasureDistance)}`)
-
-        // Zoom to fit the route
+        // Add all markers and polyline
         if (mapRef.current && L) {
+          const newMarkers: L.Marker[] = []
+          
+          // Add numbered markers for each point
+          points.forEach((point, index) => {
+            const pointNumber = index + 1
+            const markerIcon = L.divIcon({
+              html: `<div style="
+                background: #3b82f6;
+                color: white;
+                border: 3px solid white;
+                border-radius: 50%;
+                width: 28px;
+                height: 28px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-weight: bold;
+                font-size: 12px;
+                box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+              ">${pointNumber}</div>`,
+              className: 'measure-point-marker',
+              iconSize: [28, 28],
+              iconAnchor: [14, 14]
+            })
+
+            const marker = L.marker([point.lat, point.lng], { icon: markerIcon }).addTo(mapRef.current!)
+            newMarkers.push(marker)
+          })
+          
+          setMeasureMarkers(newMarkers)
+
+          // Draw polyline
+          if (points.length >= 2) {
+            const polyline = L.polyline(
+              points.map(p => [p.lat, p.lng]),
+              {
+                color: '#3b82f6',
+                weight: 4,
+                opacity: 0.8,
+                dashArray: '10, 5',
+                lineCap: 'round',
+                lineJoin: 'round'
+              }
+            ).addTo(mapRef.current)
+
+            setMeasurePolyline(polyline)
+          }
+
+          // Zoom to fit the route
           const bounds = L.latLngBounds(points.map(p => [p.lat, p.lng]))
           mapRef.current.fitBounds(bounds, { padding: [50, 50] })
         }
+
+        // Show success message with calculated distance
+        alert(`GPX-fil importerad: ${routeName}\n${points.length} punkter, ${formatDistance(totalDistance)}`)
       } catch (error) {
         console.error('Error parsing GPX:', error)
         alert('Kunde inte läsa GPX-filen. Kontrollera att filen är korrekt formaterad.')
