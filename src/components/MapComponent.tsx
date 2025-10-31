@@ -1,5 +1,7 @@
 "use client";
 import { Geolocation } from '@capacitor/geolocation';
+import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
+import { Share } from '@capacitor/share';
 
 // Extend Window type to include Capacitor (for TypeScript)
 declare global {
@@ -905,7 +907,7 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
     }
   }
 
-  const exportMeasureAsGPX = () => {
+  const exportMeasureAsGPX = async () => {
     if (measurePoints.length < 2) {
       alert('Minst 2 punkter krävs för att spara GPX')
       return
@@ -931,17 +933,44 @@ ${measurePoints.map((p, idx) => `      <trkpt lat="${p.lat}" lon="${p.lng}">
   </trk>
 </gpx>`
 
-    // Create and download file
-    const blob = new Blob([gpxContent], { type: 'application/gpx+xml' })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `svampkartan_${measureRouteName.replace(/\s/g, '_')}_${Date.now()}.gpx`
-    link.click()
-    URL.revokeObjectURL(url)
+    const fileName = `svampkartan_${measureRouteName.replace(/\s/g, '_')}_${Date.now()}.gpx`
 
-    // Show success message
-    alert(`GPX-fil sparad: ${measureRouteName}`)
+    try {
+      // Check if running on native platform
+      if (isNative) {
+        // Save file using Capacitor Filesystem API
+        const result = await Filesystem.writeFile({
+          path: fileName,
+          data: gpxContent,
+          directory: Directory.Documents,
+          encoding: Encoding.UTF8
+        })
+
+        // Share the file so user can save it where they want
+        await Share.share({
+          title: 'Spara GPX-fil',
+          text: `${measureRouteName} - ${formatDistance(totalMeasureDistance)}`,
+          url: result.uri,
+          dialogTitle: 'Spara GPX-fil'
+        })
+
+        alert(`GPX-fil sparad: ${measureRouteName}`)
+      } else {
+        // Web browser - use traditional download
+        const blob = new Blob([gpxContent], { type: 'application/gpx+xml' })
+        const url = URL.createObjectURL(blob)
+        const link = document.createElement('a')
+        link.href = url
+        link.download = fileName
+        link.click()
+        URL.revokeObjectURL(url)
+        
+        alert(`GPX-fil sparad: ${measureRouteName}`)
+      }
+    } catch (error) {
+      console.error('Fel vid sparande av GPX:', error)
+      alert('Kunde inte spara GPX-fil. Försök igen.')
+    }
   }
 
   const importGPXFile = (event: React.ChangeEvent<HTMLInputElement>) => {
