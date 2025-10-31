@@ -31,10 +31,9 @@ interface MushroomMarker {
 // Available mushroom categories
 const DEFAULT_CATEGORIES = [
   { id: 'unknown', name: 'Allmänt', emoji: '⭐', color: 'gray' },
-  { id: 'mushroom', name: 'Svamp', emoji: '🍄', color: 'green' },
-  { id: 'poisonous', name: 'Giftiga', emoji: '☠️', color: 'red' },
+  { id: 'mushroom', name: 'Svamp', emoji: '🍄‍🟫', color: 'green' },
   { id: 'berries', name: 'Bär', emoji: '🍓', color: 'purple' },
-  { id: 'common', name: 'Vanliga', emoji: '🍄‍🟫', color: 'brown' },
+
 ] as const
 
 interface MapComponentProps {
@@ -3537,7 +3536,7 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
               <div className="space-y-4 mb-6">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Svampart
+                    Art
                   </label>
                   <input
                     type="text"
