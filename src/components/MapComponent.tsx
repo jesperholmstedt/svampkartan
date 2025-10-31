@@ -2231,6 +2231,12 @@ ${measurePoints.map((p, idx) => `      <trkpt lat="${p.lat}" lon="${p.lng}">
     if (!mapRef.current || !L) return
 
     const handleMapClick = (e: any) => {
+      // Handle measuring mode first
+      if (isMeasuring) {
+        addMeasurePoint(e.latlng.lat, e.latlng.lng)
+        return
+      }
+      
       if (isParkingMode) {
         // Park car at clicked location
         const newCarLocation = { lat: e.latlng.lat, lng: e.latlng.lng }
@@ -2246,9 +2252,9 @@ ${measurePoints.map((p, idx) => `      <trkpt lat="${p.lat}" lon="${p.lng}">
       }
     }
 
-    if (isAddingMarker || isParkingMode) {
+    if (isAddingMarker || isParkingMode || isMeasuring) {
       mapRef.current.on('click', handleMapClick)
-      mapRef.current.getContainer().style.cursor = isParkingMode ? 'crosshair' : 'crosshair'
+      mapRef.current.getContainer().style.cursor = (isParkingMode || isMeasuring) ? 'crosshair' : 'crosshair'
     } else {
       mapRef.current.off('click', handleMapClick)
       mapRef.current.getContainer().style.cursor = ''
@@ -2260,7 +2266,7 @@ ${measurePoints.map((p, idx) => `      <trkpt lat="${p.lat}" lon="${p.lng}">
         mapRef.current.getContainer().style.cursor = ''
       }
     }
-  }, [isAddingMarker, isParkingMode, L])
+  }, [isAddingMarker, isParkingMode, isMeasuring, L, measurePoints, measurePolyline, measureMarkers])
 
   // Handle long press for adding markers (2 seconds)
   useEffect(() => {
