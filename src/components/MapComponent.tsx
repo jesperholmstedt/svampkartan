@@ -2896,16 +2896,6 @@ ${measurePoints.map((p, idx) => `      <trkpt lat="${p.lat}" lon="${p.lng}">
                 <span className="text-base sm:text-lg">🏷️</span>
                 <span className="font-medium text-xs sm:text-sm">Välj kategorier</span>
               </button>
-              <button 
-                onClick={() => {
-                  startMeasuring()
-                  setShowMenu(false)
-                }}
-                className="w-full px-3 sm:px-4 py-1 sm:py-1 text-left text-gray-700 hover:bg-white/50 transition-colors flex items-center gap-2 sm:gap-3"
-              >
-                <span className="text-base sm:text-lg">📏</span>
-                <span className="font-medium text-xs sm:text-sm">Mät avstånd</span>
-              </button>
               <button
                 onClick={() => {
                   setShowAddCategoryDialog(true)
@@ -3094,6 +3084,23 @@ ${measurePoints.map((p, idx) => `      <trkpt lat="${p.lat}" lon="${p.lng}">
             </button>
           </div>
         )}
+      </div>
+
+      {/* Measure Distance Button */}
+      <div className="fixed top-44 right-2" style={{ zIndex: 10000 }}>
+        <button
+          onClick={isMeasuring ? cancelMeasuring : startMeasuring}
+          className={`relative w-12 h-12 rounded-full shadow-lg transition-all duration-300 border-2 flex items-center justify-center ${
+            isMeasuring 
+              ? 'bg-red-500/80 border-red-300 animate-pulse' 
+              : 'bg-blue-500/80 border-blue-300'
+          } active:scale-95`}
+          title={isMeasuring ? "Avbryt mätning" : "Mät avstånd"}
+        >
+          <span className="text-lg leading-none">
+            {isMeasuring ? '✕' : '📏'}
+          </span>
+        </button>
       </div>
 
       {/* Beautiful Parking Dialog */}
