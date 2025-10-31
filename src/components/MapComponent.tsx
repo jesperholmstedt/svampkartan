@@ -977,33 +977,76 @@ ${measurePoints.map((p, idx) => `      <trkpt lat="${p.lat}" lon="${p.lng}">
     const file = event.target.files?.[0]
     if (!file) return
 
+    console.log('📂 Importerar GPX-fil:', file.name)
+
     const reader = new FileReader()
     reader.onload = (e) => {
       try {
         const gpxText = e.target?.result as string
+        console.log('📄 GPX innehåll:', gpxText.substring(0, 500)) // First 500 chars
+        
         const parser = new DOMParser()
         const gpxDoc = parser.parseFromString(gpxText, 'text/xml')
 
-        // Extract all trackpoints
-        const trkpts = gpxDoc.querySelectorAll('trkpt')
-        const points = Array.from(trkpts).map(pt => ({
+        // Check for parsing errors
+        const parserError = gpxDoc.querySelector('parsererror')
+        if (parserError) {
+          console.error('❌ XML parsing error:', parserError.textContent)
+          alert('GPX-filen är inte korrekt formaterad XML')
+          return
+        }
+
+        // Extract all trackpoints (from <trk> tracks)
+        let trkpts = gpxDoc.querySelectorAll('trkpt')
+        console.log('🔍 Hittade trkpt punkter:', trkpts.length)
+        
+        // Also check for route points (from <rte> routes)
+        const rtepts = gpxDoc.querySelectorAll('rtept')
+        console.log('🔍 Hittade rtept punkter:', rtepts.length)
+
+        // Also check for waypoints
+        const wpts = gpxDoc.querySelectorAll('wpt')
+        console.log('🔍 Hittade wpt punkter:', wpts.length)
+
+        // Use whichever has points
+        let pointElements = trkpts
+        if (trkpts.length === 0 && rtepts.length > 0) {
+          pointElements = rtepts
+          console.log('✅ Använder route points istället för track points')
+        } else if (trkpts.length === 0 && rtepts.length === 0 && wpts.length > 0) {
+          pointElements = wpts
+          console.log('✅ Använder waypoints')
+        }
+
+        const points = Array.from(pointElements).map(pt => ({
           lat: parseFloat(pt.getAttribute('lat') || '0'),
           lng: parseFloat(pt.getAttribute('lon') || '0')
         }))
 
+        console.log('📍 Totalt antal punkter efter parsing:', points.length)
+        if (points.length > 0) {
+          console.log('📍 Första punkten:', points[0])
+          console.log('📍 Sista punkten:', points[points.length - 1])
+        }
+
         if (points.length === 0) {
-          alert('Inga punkter hittades i GPX-filen')
+          alert('Inga punkter hittades i GPX-filen. Kontrollera att filen innehåller <trkpt>, <rtept> eller <wpt> element.')
           return
         }
 
-        // Get route name from GPX
-        const nameElement = gpxDoc.querySelector('trk > name')
+        // Get route name from GPX (check multiple locations)
+        let nameElement = gpxDoc.querySelector('trk > name')
+        if (!nameElement) nameElement = gpxDoc.querySelector('rte > name')
+        if (!nameElement) nameElement = gpxDoc.querySelector('metadata > name')
         const routeName = nameElement?.textContent || 'Importerad rutt'
+        console.log('📝 Route namn:', routeName)
 
         // Clear existing measurement
+        console.log('🧹 Rensar befintliga mätningar')
         clearMeasureElements()
         
         // Set all points at once
+        console.log('💾 Sätter punkter i state')
         setMeasurePoints(points)
         setMeasureRouteName(routeName)
         setIsMeasuring(true)
@@ -1020,12 +1063,15 @@ ${measurePoints.map((p, idx) => `      <trkpt lat="${p.lat}" lon="${p.lng}">
             )
           }
         }
+        console.log('📏 Total distans:', totalDistance, 'meter')
         setTotalMeasureDistance(totalDistance)
 
         // Add all markers and polyline
+        console.log('🗺️ Map ref finns:', !!mapRef.current, 'Leaflet finns:', !!L)
         if (mapRef.current && L) {
           const newMarkers: L.Marker[] = []
           
+          console.log('➕ Lägger till', points.length, 'markers på kartan')
           // Add numbered markers for each point
           points.forEach((point, index) => {
             const pointNumber = index + 1
@@ -1053,10 +1099,12 @@ ${measurePoints.map((p, idx) => `      <trkpt lat="${p.lat}" lon="${p.lng}">
             newMarkers.push(marker)
           })
           
+          console.log('✅ Lade till', newMarkers.length, 'markers')
           setMeasureMarkers(newMarkers)
 
           // Draw polyline
           if (points.length >= 2) {
+            console.log('📐 Ritar polyline med', points.length, 'punkter')
             const polyline = L.polyline(
               points.map(p => [p.lat, p.lng]),
               {
@@ -1069,15 +1117,21 @@ ${measurePoints.map((p, idx) => `      <trkpt lat="${p.lat}" lon="${p.lng}">
               }
             ).addTo(mapRef.current)
 
+            console.log('✅ Polyline skapad')
             setMeasurePolyline(polyline)
           }
 
           // Zoom to fit the route
+          console.log('🔍 Zoomar till rutten')
           const bounds = L.latLngBounds(points.map(p => [p.lat, p.lng]))
           mapRef.current.fitBounds(bounds, { padding: [50, 50] })
+          console.log('✅ Zoom klar')
+        } else {
+          console.error('❌ Kan inte rita på kartan - map ref eller L saknas')
         }
 
         // Show success message with calculated distance
+        console.log('✅ Import klar!')
         alert(`GPX-fil importerad: ${routeName}\n${points.length} punkter, ${formatDistance(totalDistance)}`)
       } catch (error) {
         console.error('Error parsing GPX:', error)
@@ -3023,20 +3077,6 @@ ${measurePoints.map((p, idx) => `      <trkpt lat="${p.lat}" lon="${p.lng}">
                 <span className="text-base sm:text-lg">ℹ️</span>
                 <span className="font-medium text-xs sm:text-sm">Om appen</span>
               </button>
-              <label className="w-full px-3 sm:px-4 py-1 sm:py-1 text-left text-gray-700 hover:bg-white/50 transition-colors flex items-center gap-2 sm:gap-3 cursor-pointer">
-                <input
-                  type="file"
-                  accept=".gpx"
-                  onChange={(e) => {
-                    importGPXFile(e)
-                    setShowMenu(false)
-                  }}
-                  className="hidden"
-                  id="gpx-import-menu"
-                />
-                <span className="text-base sm:text-lg">📁</span>
-                <span className="font-medium text-xs sm:text-sm">Importera GPX</span>
-              </label>
             </div>
             {/* Spacer för att sista menyvalet alltid ska gå att skrolla fram */}
             <div style={{ height: 30, pointerEvents: 'none' }} />
@@ -3366,22 +3406,6 @@ ${measurePoints.map((p, idx) => `      <trkpt lat="${p.lat}" lon="${p.lng}">
               >
                 ← Fortsätt mäta
               </button>
-            </div>
-
-            {/* Import GPX Section */}
-            <div className="mt-6 pt-6 border-t border-gray-200">
-              <label className="block">
-                <input
-                  type="file"
-                  accept=".gpx"
-                  onChange={importGPXFile}
-                  className="hidden"
-                  id="gpx-import-complete"
-                />
-                <div className="cursor-pointer w-full p-3 rounded-xl bg-gray-100 text-gray-700 hover:bg-gray-200 active:scale-95 transition-all duration-200 text-center font-medium">
-                  📁 Importera GPX-fil
-                </div>
-              </label>
             </div>
           </div>
         </div>
