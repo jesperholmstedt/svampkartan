@@ -144,6 +144,15 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
   const [showWalkingDirection, setShowWalkingDirection] = useState(false)
   const [walkingDirectionLine, setWalkingDirectionLine] = useState<any>(null)
   const [showMapsConfirmation, setShowMapsConfirmation] = useState(false)
+  
+  // Measuring tool state
+  const [isMeasuring, setIsMeasuring] = useState(false)
+  const [measurePoints, setMeasurePoints] = useState<{lat: number, lng: number}[]>([])
+  const [measurePolyline, setMeasurePolyline] = useState<any>(null)
+  const [measureMarkers, setMeasureMarkers] = useState<any[]>([])
+  const [showMeasureComplete, setShowMeasureComplete] = useState(false)
+  const [measureRouteName, setMeasureRouteName] = useState('Min rutt')
+  const [totalMeasureDistance, setTotalMeasureDistance] = useState(0)
   // Attach event listener to map to detect manual panning
   useEffect(() => {
     if (!mapRef.current) return;
@@ -736,6 +745,262 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
     }
   }
 
+  // Measuring tool functions
+  const startMeasuring = () => {
+    setIsMeasuring(true)
+    setMeasurePoints([])
+    setTotalMeasureDistance(0)
+    setShowMeasureComplete(false)
+    clearMeasureElements()
+  }
+
+  const addMeasurePoint = (lat: number, lng: number) => {
+    if (!mapRef.current || !L) return
+
+    const newPoints = [...measurePoints, { lat, lng }]
+    setMeasurePoints(newPoints)
+
+    // Add marker for this point
+    const pointNumber = newPoints.length
+    const markerIcon = L.divIcon({
+      html: `<div style="
+        background: #3b82f6;
+        color: white;
+        border: 3px solid white;
+        border-radius: 50%;
+        width: 28px;
+        height: 28px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: bold;
+        font-size: 12px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+      ">${pointNumber}</div>`,
+      className: 'measure-point-marker',
+      iconSize: [28, 28],
+      iconAnchor: [14, 14]
+    })
+
+    const marker = L.marker([lat, lng], { icon: markerIcon }).addTo(mapRef.current)
+    setMeasureMarkers(prev => [...prev, marker])
+
+    // Calculate total distance
+    if (newPoints.length >= 2) {
+      let totalDistance = 0
+      for (let i = 1; i < newPoints.length; i++) {
+        totalDistance += calculateDistance(
+          newPoints[i - 1].lat,
+          newPoints[i - 1].lng,
+          newPoints[i].lat,
+          newPoints[i].lng
+        )
+      }
+      setTotalMeasureDistance(totalDistance)
+
+      // Draw polyline
+      if (measurePolyline && mapRef.current) {
+        mapRef.current.removeLayer(measurePolyline)
+      }
+
+      const polyline = L.polyline(
+        newPoints.map(p => [p.lat, p.lng]),
+        {
+          color: '#3b82f6',
+          weight: 4,
+          opacity: 0.8,
+          dashArray: '10, 5',
+          lineCap: 'round',
+          lineJoin: 'round'
+        }
+      ).addTo(mapRef.current)
+
+      setMeasurePolyline(polyline)
+    }
+  }
+
+  const clearMeasureElements = () => {
+    // Remove polyline
+    if (measurePolyline && mapRef.current) {
+      mapRef.current.removeLayer(measurePolyline)
+      setMeasurePolyline(null)
+    }
+
+    // Remove markers
+    measureMarkers.forEach(marker => {
+      if (mapRef.current) {
+        mapRef.current.removeLayer(marker)
+      }
+    })
+    setMeasureMarkers([])
+  }
+
+  const completeMeasuring = () => {
+    if (measurePoints.length < 2) {
+      alert('Lägg till minst 2 punkter för att mäta avstånd')
+      return
+    }
+    setShowMeasureComplete(true)
+  }
+
+  const cancelMeasuring = () => {
+    setIsMeasuring(false)
+    setMeasurePoints([])
+    setTotalMeasureDistance(0)
+    setShowMeasureComplete(false)
+    clearMeasureElements()
+  }
+
+  const undoLastMeasurePoint = () => {
+    if (measurePoints.length === 0) return
+
+    const newPoints = measurePoints.slice(0, -1)
+    setMeasurePoints(newPoints)
+
+    // Remove last marker
+    const lastMarker = measureMarkers[measureMarkers.length - 1]
+    if (lastMarker && mapRef.current) {
+      mapRef.current.removeLayer(lastMarker)
+    }
+    setMeasureMarkers(prev => prev.slice(0, -1))
+
+    // Recalculate distance and redraw polyline
+    if (newPoints.length >= 2) {
+      let totalDistance = 0
+      for (let i = 1; i < newPoints.length; i++) {
+        totalDistance += calculateDistance(
+          newPoints[i - 1].lat,
+          newPoints[i - 1].lng,
+          newPoints[i].lat,
+          newPoints[i].lng
+        )
+      }
+      setTotalMeasureDistance(totalDistance)
+
+      // Redraw polyline
+      if (measurePolyline && mapRef.current) {
+        mapRef.current.removeLayer(measurePolyline)
+      }
+
+      const polyline = L.polyline(
+        newPoints.map(p => [p.lat, p.lng]),
+        {
+          color: '#3b82f6',
+          weight: 4,
+          opacity: 0.8,
+          dashArray: '10, 5',
+          lineCap: 'round',
+          lineJoin: 'round'
+        }
+      ).addTo(mapRef.current)
+
+      setMeasurePolyline(polyline)
+    } else {
+      // Only one point left, remove polyline
+      if (measurePolyline && mapRef.current) {
+        mapRef.current.removeLayer(measurePolyline)
+        setMeasurePolyline(null)
+      }
+      setTotalMeasureDistance(0)
+    }
+  }
+
+  const exportMeasureAsGPX = () => {
+    if (measurePoints.length < 2) {
+      alert('Minst 2 punkter krävs för att spara GPX')
+      return
+    }
+
+    const gpxContent = `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="Svampkartan - Min Svampkarta" xmlns="http://www.topografix.com/GPX/1/1">
+  <metadata>
+    <name>${measureRouteName}</name>
+    <desc>Mätlinje skapad i Svampkartan - Total distans: ${formatDistance(totalMeasureDistance)}</desc>
+    <time>${new Date().toISOString()}</time>
+    <keywords>svampkartan, mätlinje, vandring</keywords>
+  </metadata>
+  <trk>
+    <name>${measureRouteName}</name>
+    <desc>Totalt ${measurePoints.length} punkter, ${formatDistance(totalMeasureDistance)}</desc>
+    <trkseg>
+${measurePoints.map((p, idx) => `      <trkpt lat="${p.lat}" lon="${p.lng}">
+        <name>Punkt ${idx + 1}</name>
+        <time>${new Date().toISOString()}</time>
+      </trkpt>`).join('\n')}
+    </trkseg>
+  </trk>
+</gpx>`
+
+    // Create and download file
+    const blob = new Blob([gpxContent], { type: 'application/gpx+xml' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `svampkartan_${measureRouteName.replace(/\s/g, '_')}_${Date.now()}.gpx`
+    link.click()
+    URL.revokeObjectURL(url)
+
+    // Show success message
+    alert(`GPX-fil sparad: ${measureRouteName}`)
+  }
+
+  const importGPXFile = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      try {
+        const gpxText = e.target?.result as string
+        const parser = new DOMParser()
+        const gpxDoc = parser.parseFromString(gpxText, 'text/xml')
+
+        // Extract all trackpoints
+        const trkpts = gpxDoc.querySelectorAll('trkpt')
+        const points = Array.from(trkpts).map(pt => ({
+          lat: parseFloat(pt.getAttribute('lat') || '0'),
+          lng: parseFloat(pt.getAttribute('lon') || '0')
+        }))
+
+        if (points.length === 0) {
+          alert('Inga punkter hittades i GPX-filen')
+          return
+        }
+
+        // Get route name from GPX
+        const nameElement = gpxDoc.querySelector('trk > name')
+        const routeName = nameElement?.textContent || 'Importerad rutt'
+
+        // Clear existing measurement and load imported route
+        clearMeasureElements()
+        setMeasurePoints([])
+        setMeasureRouteName(routeName)
+        setIsMeasuring(true)
+
+        // Add each point
+        points.forEach(point => {
+          addMeasurePoint(point.lat, point.lng)
+        })
+
+        // Show success message
+        alert(`GPX-fil importerad: ${routeName}\n${points.length} punkter, ${formatDistance(totalMeasureDistance)}`)
+
+        // Zoom to fit the route
+        if (mapRef.current && L) {
+          const bounds = L.latLngBounds(points.map(p => [p.lat, p.lng]))
+          mapRef.current.fitBounds(bounds, { padding: [50, 50] })
+        }
+      } catch (error) {
+        console.error('Error parsing GPX:', error)
+        alert('Kunde inte läsa GPX-filen. Kontrollera att filen är korrekt formaterad.')
+      }
+    }
+    reader.readAsText(file)
+
+    // Reset input so same file can be selected again
+    event.target.value = ''
+  }
+
   // Navigation functions
   const navigateToMarker = (marker: MushroomMarker, mode: 'driving' | 'walking') => {
     if (!userLocation) {
@@ -837,6 +1102,12 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
   }
 
   const handleMapClick = (lat: number, lng: number) => {
+    // Handle measuring mode first
+    if (isMeasuring) {
+      addMeasurePoint(lat, lng)
+      return
+    }
+    
     if (isParkingMode) {
       // Park car at clicked location
       const newCarLocation = { lat, lng }
@@ -2619,6 +2890,16 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
                 <span className="text-base sm:text-lg">🏷️</span>
                 <span className="font-medium text-xs sm:text-sm">Välj kategorier</span>
               </button>
+              <button 
+                onClick={() => {
+                  startMeasuring()
+                  setShowMenu(false)
+                }}
+                className="w-full px-3 sm:px-4 py-1 sm:py-1 text-left text-gray-700 hover:bg-white/50 transition-colors flex items-center gap-2 sm:gap-3"
+              >
+                <span className="text-base sm:text-lg">📏</span>
+                <span className="font-medium text-xs sm:text-sm">Mät avstånd</span>
+              </button>
               <button
                 onClick={() => {
                   setShowAddCategoryDialog(true)
@@ -2657,6 +2938,20 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
                 <span className="text-base sm:text-lg">ℹ️</span>
                 <span className="font-medium text-xs sm:text-sm">Om appen</span>
               </button>
+              <label className="w-full px-3 sm:px-4 py-1 sm:py-1 text-left text-gray-700 hover:bg-white/50 transition-colors flex items-center gap-2 sm:gap-3 cursor-pointer">
+                <input
+                  type="file"
+                  accept=".gpx"
+                  onChange={(e) => {
+                    importGPXFile(e)
+                    setShowMenu(false)
+                  }}
+                  className="hidden"
+                  id="gpx-import-menu"
+                />
+                <span className="text-base sm:text-lg">📁</span>
+                <span className="font-medium text-xs sm:text-sm">Importera GPX</span>
+              </label>
             </div>
             {/* Spacer för att sista menyvalet alltid ska gå att skrolla fram */}
             <div style={{ height: 30, pointerEvents: 'none' }} />
@@ -2851,6 +3146,141 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
             >
               Avbryt
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Measuring Tool UI */}
+      {isMeasuring && !showMeasureComplete && (
+        <div className="fixed top-20 left-1/2 transform -translate-x-1/2 bg-white/95 backdrop-blur-md rounded-2xl px-4 py-3 shadow-2xl border border-white/20" style={{ zIndex: 15000 }}>
+          <div className="text-center">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-xl">📏</span>
+              <span className="font-semibold text-gray-800">Mät avstånd</span>
+            </div>
+            {measurePoints.length === 0 ? (
+              <p className="text-sm text-gray-600">Klicka på kartan för att sätta första punkten</p>
+            ) : measurePoints.length === 1 ? (
+              <p className="text-sm text-gray-600">Klicka för att sätta nästa punkt</p>
+            ) : (
+              <div className="text-center">
+                <div className="text-2xl font-bold text-blue-600 mb-1">
+                  {formatDistance(totalMeasureDistance)}
+                </div>
+                <p className="text-xs text-gray-600">{measurePoints.length} punkter</p>
+              </div>
+            )}
+          </div>
+          
+          <div className="flex gap-2 mt-3">
+            {measurePoints.length > 0 && (
+              <button
+                onClick={undoLastMeasurePoint}
+                className="flex-1 px-3 py-2 rounded-xl bg-yellow-500 text-white hover:bg-yellow-600 active:scale-95 transition-all text-sm font-medium"
+              >
+                ↶ Ångra
+              </button>
+            )}
+            {measurePoints.length >= 2 && (
+              <button
+                onClick={completeMeasuring}
+                className="flex-1 px-3 py-2 rounded-xl bg-emerald-500 text-white hover:bg-emerald-600 active:scale-95 transition-all text-sm font-medium"
+              >
+                ✓ Klar
+              </button>
+            )}
+            <button
+              onClick={cancelMeasuring}
+              className="flex-1 px-3 py-2 rounded-xl bg-gray-500 text-white hover:bg-gray-600 active:scale-95 transition-all text-sm font-medium"
+            >
+              ✕ Avbryt
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Measure Complete Dialog */}
+      {showMeasureComplete && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4" style={{ zIndex: 20000 }}>
+          <div className="bg-white/90 backdrop-blur-md rounded-3xl p-6 max-w-sm w-full border border-white/20 shadow-2xl">
+            {/* Header */}
+            <div className="text-center mb-6">
+              <div className="text-4xl mb-2">📏</div>
+              <h3 className="text-xl font-semibold text-gray-800 mb-2">Mätning klar!</h3>
+              <div className="text-3xl font-bold text-blue-600 mb-2">
+                {formatDistance(totalMeasureDistance)}
+              </div>
+              <p className="text-gray-600 text-sm">{measurePoints.length} punkter</p>
+            </div>
+
+            {/* Route Name Input */}
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Namn på rutt (valfritt)
+              </label>
+              <input
+                type="text"
+                value={measureRouteName}
+                onChange={(e) => setMeasureRouteName(e.target.value)}
+                placeholder="T.ex. Min vandring"
+                className="w-full px-4 py-2 rounded-xl border border-gray-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all"
+              />
+            </div>
+
+            {/* Action Buttons */}
+            <div className="space-y-3">
+              <button
+                onClick={() => {
+                  exportMeasureAsGPX()
+                  setShowMeasureComplete(false)
+                  cancelMeasuring()
+                }}
+                className="w-full p-4 rounded-2xl border-2 bg-blue-500 border-blue-400 text-white hover:bg-blue-600 active:scale-95 transition-all duration-200"
+              >
+                <div className="flex items-center justify-center gap-3">
+                  <span className="text-xl">💾</span>
+                  <div className="text-left">
+                    <div className="font-medium">Spara som GPX</div>
+                    <div className="text-sm opacity-80">Exportera till fil</div>
+                  </div>
+                </div>
+              </button>
+
+              <button
+                onClick={() => {
+                  setShowMeasureComplete(false)
+                  cancelMeasuring()
+                }}
+                className="w-full p-3 rounded-xl bg-emerald-500 text-white hover:bg-emerald-600 active:scale-95 transition-all duration-200 font-medium"
+              >
+                ✓ Klar
+              </button>
+
+              <button
+                onClick={() => {
+                  setShowMeasureComplete(false)
+                }}
+                className="w-full p-3 rounded-xl bg-gray-100 text-gray-700 hover:bg-gray-200 active:scale-95 transition-all duration-200"
+              >
+                ← Fortsätt mäta
+              </button>
+            </div>
+
+            {/* Import GPX Section */}
+            <div className="mt-6 pt-6 border-t border-gray-200">
+              <label className="block">
+                <input
+                  type="file"
+                  accept=".gpx"
+                  onChange={importGPXFile}
+                  className="hidden"
+                  id="gpx-import-complete"
+                />
+                <div className="cursor-pointer w-full p-3 rounded-xl bg-gray-100 text-gray-700 hover:bg-gray-200 active:scale-95 transition-all duration-200 text-center font-medium">
+                  📁 Importera GPX-fil
+                </div>
+              </label>
+            </div>
           </div>
         </div>
       )}
