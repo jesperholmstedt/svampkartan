@@ -53,6 +53,9 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
 
   // Ref to track if user is manually panning the map (prevents auto-centering during navigation)
   const isUserPanning = useRef(false)
+  
+  // Aggressive polling interval for Android (force position updates every second)
+  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null)
 
   // ...alla useState och useRef deklarationer...
   const userArrowOverlayRef = useRef<SVGElement | null>(null)
@@ -427,13 +430,14 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
         );
         setWatchId(id);
       } else {
+        // Native: Use both watchPosition AND aggressive polling
         Geolocation.watchPosition({
           enableHighAccuracy: true,
-          timeout: 5000       // Minska timeout till 5 sekunder för snabbare uppdateringar
+          timeout: 5000
         }, (position, error) => {
           if (position) {
             const { latitude, longitude, accuracy } = position.coords;
-            console.log('Location update (native):', latitude, longitude, 'accuracy:', accuracy);
+            console.log('Location update (native watchPosition):', latitude, longitude, 'accuracy:', accuracy);
             setUserLocation({ lat: latitude, lng: longitude });
             setUserSpeed(position.coords.speed ?? null);
             updateUserMarker(latitude, longitude);
@@ -442,11 +446,32 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
             console.log('watchPosition error (native):', error);
           }
         }).then((id: string) => setWatchId(id));
+
+        // AGGRESSIVE POLLING: Force getCurrentPosition every 1 second for Android
+        console.log('🔄 Starting aggressive 1-second polling for Android')
+        pollingIntervalRef.current = setInterval(async () => {
+          try {
+            const position = await Geolocation.getCurrentPosition({
+              enableHighAccuracy: true,
+              timeout: 2000,  // Short timeout for polling
+              maximumAge: 0   // Always get fresh position
+            });
+            const { latitude, longitude, accuracy } = position.coords;
+            console.log('📍 Polling update:', latitude, longitude, 'accuracy:', accuracy);
+            setUserLocation({ lat: latitude, lng: longitude });
+            setUserSpeed(position.coords.speed ?? null);
+            updateUserMarker(latitude, longitude);
+          } catch (error) {
+            console.log('Polling error (non-fatal):', error);
+            // Don't show error - polling failures are expected sometimes
+          }
+        }, 1000); // Poll every 1 second
       }
     }
   }
 
   const stopLocationWatch = () => {
+    // Stop watchPosition
     if (watchId !== null) {
       if (!isNative && typeof navigator !== 'undefined' && 'geolocation' in navigator && typeof watchId === 'number') {
         navigator.geolocation.clearWatch(watchId);
@@ -454,6 +479,13 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
         Geolocation.clearWatch({ id: watchId });
       }
       setWatchId(null);
+    }
+    
+    // Stop aggressive polling for Android
+    if (pollingIntervalRef.current) {
+      console.log('🛑 Stopping aggressive polling')
+      clearInterval(pollingIntervalRef.current);
+      pollingIntervalRef.current = null;
     }
   }
 
@@ -551,8 +583,8 @@ export default function MapComponent({ className = '' }: MapComponentProps) {
         }
         lastMovementDetectionTs.current = nowTs
 
-        // Only confirm movement (and set heading) after 2 consecutive detections to reduce spikes
-        if (movementStreakRef.current >= 2) {
+        // Reduce streak requirement to 1 for immediate response (since polling is now every 1 second)
+        if (movementStreakRef.current >= 1) {
           isMovingByDistance = detectedByDistance
           isMovingBySpeed = detectedBySpeed
           if (prev && distMeters >= 0.000001) {
