@@ -1838,7 +1838,7 @@ ${measurePoints.map((p, idx) => `      <trkpt lat="${p.lat}" lon="${p.lng}">
             fadeAnimation: true,
             markerZoomAnimation: true,
             zoomSnap: 0.25, // Allow quarter-step zooms for smoother experience
-            zoomDelta: 0.3, // Smaller zoom steps (0.3 = 30% of standard zoom per double-click)
+            zoomDelta: 0.4, // Smaller zoom steps (0.4 = 40% of standard zoom per double-click)
             wheelPxPerZoomLevel: 120 // Smoother mouse wheel zoom
           })
           // Track map interaction state to avoid arrow activation during zoom/pan
@@ -1877,7 +1877,7 @@ ${measurePoints.map((p, idx) => `      <trkpt lat="${p.lat}" lon="${p.lng}">
                     // ...other properties if needed
                   });
                   const latlng = map.containerPointToLatLng(containerPoint);
-                  map.setView(latlng, map.getZoom() + 1.5, { animate: true });
+                  map.setView(latlng, map.getZoom() + 1, { animate: true });
                   e.preventDefault();
                   lastTapTime = 0;
                   if (doubleTapTimer) clearTimeout(doubleTapTimer);
